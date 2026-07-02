@@ -4,22 +4,45 @@ const Firebird = require('node-firebird');
 const path = require('path');
 const fs   = require('fs');
 const os   = require('os');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 
+const SUPERVISOR_SENHA = '18321937';
+
 // ─── Configuração local de usuários ─────────────────────────────────────────
+// Escopado por base conectada (host+porta+arquivo) para não misturar usuários
+// de um cliente com os de outro quando o consultor troca de base pelo "Configurar Base".
 function getConfigPath() {
   const dir = path.join(process.env.APPDATA || path.join(os.homedir(), '.config'), 'Painel CLIPP');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, 'usuarios.json');
+  const key  = `${dbConfig.host}:${dbConfig.port}:${dbConfig.database}`.toLowerCase();
+  const hash = crypto.createHash('md5').update(key).digest('hex').slice(0, 12);
+  const scopedPath = path.join(dir, `usuarios_${hash}.json`);
+  // Migração única do arquivo pré-versão (não escopado): só é aproveitada se
+  // NENHUMA base já foi escopada ainda (primeiro connect após o upgrade), e o
+  // arquivo é renomeado na sequência para não vazar os usuários daquele cliente
+  // para as próximas bases conectadas.
+  const legacyPath = path.join(dir, 'usuarios.json');
+  const jaTemEscopado = fs.readdirSync(dir).some(f => f.startsWith('usuarios_'));
+  if (!fs.existsSync(scopedPath) && !jaTemEscopado && fs.existsSync(legacyPath)) {
+    try { fs.renameSync(legacyPath, scopedPath); } catch(e) {}
+  }
+  return scopedPath;
 }
 const PERM_DEFAULT = { resumo:true, vendas:true, estoque:true, receber:true, pagar:true, equilibrio:true, contas:true };
 const CONFIG_DEFAULT = {
-  usuarios: [{ id:0, nome:'Supervisor', senha:'18321937', supervisor:true, permissoes:{ ...PERM_DEFAULT } }]
+  usuarios: [{ id:0, nome:'Supervisor', senha:SUPERVISOR_SENHA, supervisor:true, permissoes:{ ...PERM_DEFAULT } }]
 };
 function loadConfig() {
   const p = getConfigPath();
-  if (!fs.existsSync(p)) { saveConfig(CONFIG_DEFAULT); return JSON.parse(JSON.stringify(CONFIG_DEFAULT)); }
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch(e) { return JSON.parse(JSON.stringify(CONFIG_DEFAULT)); }
+  let cfg;
+  if (!fs.existsSync(p)) { saveConfig(CONFIG_DEFAULT); cfg = JSON.parse(JSON.stringify(CONFIG_DEFAULT)); }
+  else { try { cfg = JSON.parse(fs.readFileSync(p, 'utf8')); } catch(e) { cfg = JSON.parse(JSON.stringify(CONFIG_DEFAULT)); } }
+  // Garantia: a senha do Supervisor nunca muda, mesmo se o arquivo for editado manualmente.
+  const sup = cfg.usuarios.find(u => u.supervisor);
+  if (sup) sup.senha = SUPERVISOR_SENHA;
+  else cfg.usuarios.unshift({ id:0, nome:'Supervisor', senha:SUPERVISOR_SENHA, supervisor:true, permissoes:{ ...PERM_DEFAULT } });
+  return cfg;
 }
 function saveConfig(cfg) { fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8'); }
 
@@ -675,7 +698,8 @@ app.put('/api/config-usuarios', (req, res) => {
   const cfg = loadConfig();
   const sup = cfg.usuarios.find(u => u.supervisor);
   if (!sup || sup.senha !== String(supervisorSenha||'')) return res.json({ ok:false, error:'Senha de supervisor inválida.' });
-  cfg.usuarios = usuarios;
+  // A senha do Supervisor é fixa e não pode ser alterada pela tela de configurações.
+  cfg.usuarios = usuarios.map(u => u.supervisor ? { ...u, senha: SUPERVISOR_SENHA } : u);
   saveConfig(cfg);
   res.json({ ok:true });
 });
@@ -739,10 +763,25 @@ app.post('/api/connect', (req, res) => {
       return res.json({ ok:false, error: err.message + hint });
     }
     db.query('SELECT COUNT(*) C FROM TB_NFVENDA', (err2, rows) => {
-      db.detach();
-      if (err2) return res.json({ ok:false, error:err2.message });
-      dbConfig = cfg;
-      res.json({ ok:true, nfCount: rows&&rows[0] ? ri(rows[0].C) : 0, fbVersion: fbVersion||'2.5' });
+      if (err2) { db.detach(); return res.json({ ok:false, error:err2.message }); }
+      const nfCount = rows&&rows[0] ? ri(rows[0].C) : 0;
+      // Dados do emitente (nome/cidade) — identifica de qual cliente é a base conectada.
+      db.query(`SELECT FIRST 1 e.NOME, e.NOME_FANTA, c.NOME CIDADE, c.SIGLA_UF UF
+                 FROM TB_EMITENTE e LEFT JOIN TB_CIDADE_SIS c ON c.ID_CIDADE = e.ID_CIDADE`, (err3, erows) => {
+        db.detach();
+        dbConfig = cfg;
+        let emitente = null;
+        if (!err3 && erows && erows[0]) {
+          const row = erows[0];
+          const fanta = String(row.NOME_FANTA||'').split(' @')[0].trim();
+          emitente = {
+            nome:   fanta || String(row.NOME||'').trim(),
+            cidade: String(row.CIDADE||'').trim(),
+            uf:     String(row.UF||'').trim(),
+          };
+        }
+        res.json({ ok:true, nfCount, fbVersion: fbVersion||'2.5', emitente });
+      });
     });
   });
 });

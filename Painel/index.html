@@ -155,8 +155,8 @@
 </div>
 <header>
   <div>
-    <h1>Geovana Modas — Diagnóstico do Negócio</h1>
-    <p>São Gotardo, MG · Dados extraídos do sistema CLIPP em 29/06/2026</p>
+    <h1 id="headerTitle">Painel CLIPP — Diagnóstico do Negócio</h1>
+    <p id="headerSubtitle">Conectando à base…</p>
   </div>
   <div class="header-actions">
     <button id="btnAtualizarApp" class="btn-update-check" title="Verificar atualização" onclick="checkUpdateClick()">↑ Atualizar<span class="update-badge"></span></button>
@@ -1037,7 +1037,9 @@ async function loadConfiguracoes() {
       <div class="perm-row">${perms}</div>
       <div class="senha-row">
         <label>Senha:</label>
-        <input type="password" data-uid="${u.id}" class="senha-input" placeholder="Nova senha (deixe em branco para não alterar)" autocomplete="new-password">
+        ${u.supervisor
+          ? `<input type="password" class="senha-input" placeholder="Fixa — não editável" disabled title="A senha do Supervisor é fixa e não pode ser alterada.">`
+          : `<input type="password" data-uid="${u.id}" class="senha-input" placeholder="Nova senha (deixe em branco para não alterar)" autocomplete="new-password">`}
       </div>
     </div>`;
   }).join('');
@@ -1144,6 +1146,17 @@ function initApp(dados) {
   renderAll();
 }
 
+function atualizarHeaderEmitente(emitente) {
+  const titulo = (emitente && emitente.nome) ? emitente.nome : 'Painel CLIPP';
+  const hoje = new Date().toLocaleDateString('pt-BR');
+  const local = (emitente && emitente.cidade)
+    ? `${emitente.cidade}${emitente.uf ? ', ' + emitente.uf : ''} · `
+    : '';
+  document.getElementById('headerTitle').textContent = `${titulo} — Diagnóstico do Negócio`;
+  document.getElementById('headerSubtitle').textContent = `${local}Dados extraídos do sistema CLIPP em ${hoje}`;
+  document.title = `${titulo} — Diagnóstico do Negócio`;
+}
+
 async function fetchAndInit(dbPath, host, port, user, password, fbVersion, autoConnect = false) {
   const overlay = document.getElementById('loadingOverlay');
   const loadMsg = document.getElementById('loadingMsg');
@@ -1156,6 +1169,7 @@ async function fetchAndInit(dbPath, host, port, user, password, fbVersion, autoC
     });
     const connData = await connRes.json();
     if (!connData.ok) throw new Error('Conexão falhou: ' + connData.error);
+    atualizarHeaderEmitente(connData.emitente);
     localStorage.setItem('clipp_db_path', dbPath);
     localStorage.setItem('clipp_db_host', host||'127.0.0.1');
     localStorage.setItem('clipp_db_port', String(port||3050));
