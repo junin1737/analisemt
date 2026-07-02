@@ -9,12 +9,38 @@ const { execSync } = require('child_process');
 
 const SUPERVISOR_SENHA = '18321937';
 
+function getConfigDir() {
+  const dir = path.join(process.env.APPDATA || path.join(os.homedir(), '.config'), 'Painel CLIPP');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// Grava, em disco, qual base (arquivo/host/porta) está de fato ativa no momento —
+// permite auditar se o servidor está mesmo apontando pra base que o usuário espera,
+// em vez de confiar só na memória do processo. Chamado a cada /api/connect e no
+// início de cada carga de dados (/api/dados), antes de qualquer query rodar.
+function gravarBaseAtualIni(cfg, evento) {
+  const iniPath = path.join(getConfigDir(), 'base_atual.ini');
+  const linhas = [
+    '[base_atual]',
+    `momento=${new Date().toISOString()}`,
+    `evento=${evento}`,
+    `host=${cfg.host}`,
+    `port=${cfg.port}`,
+    `database=${cfg.database}`,
+    `user=${cfg.user}`,
+    `pid=${process.pid}`,
+    '',
+  ];
+  try { fs.writeFileSync(iniPath, linhas.join('\r\n'), 'utf8'); }
+  catch (e) { console.error('Erro ao gravar base_atual.ini:', e.message); }
+}
+
 // ─── Configuração local de usuários ─────────────────────────────────────────
 // Escopado por base conectada (host+porta+arquivo) para não misturar usuários
 // de um cliente com os de outro quando o consultor troca de base pelo "Configurar Base".
 function getConfigPath() {
-  const dir = path.join(process.env.APPDATA || path.join(os.homedir(), '.config'), 'Painel CLIPP');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const dir = getConfigDir();
   const key  = `${dbConfig.host}:${dbConfig.port}:${dbConfig.database}`.toLowerCase();
   const hash = crypto.createHash('md5').update(key).digest('hex').slice(0, 12);
   const scopedPath = path.join(dir, `usuarios_${hash}.json`);
@@ -142,9 +168,9 @@ function formaColor(f) { return FORMA_COLORS[f] || '#aaa'; }
 
 // ─── All queries in ONE sequential connection ────────────────────────────────
 async function buildDados(s, e, months) {
-
+  gravarBaseAtualIni(dbConfig, 'buildDados:start');
   const db = await attachDb();
-  console.log('DB attached, running queries sequentially...');
+  console.log('DB attached, running queries sequentially...', JSON.stringify({host:dbConfig.host, port:dbConfig.port, database:dbConfig.database}));
 
   try {
     // ── VENDAS ──────────────────────────────────────────────────────────────
@@ -797,6 +823,7 @@ app.post('/api/connect', (req, res) => {
                  FROM TB_EMITENTE e LEFT JOIN TB_CIDADE_SIS c ON c.ID_CIDADE = e.ID_CIDADE`, (err3, erows) => {
         db.detach();
         dbConfig = cfg;
+        gravarBaseAtualIni(dbConfig, 'connect');
         let emitente = null;
         if (!err3 && erows && erows[0]) {
           const row = erows[0];
