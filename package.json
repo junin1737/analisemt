@@ -1,6 +1,6 @@
 {
   "name": "clipp-painel",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Painel de análise CLIPP - MT Automações",
   "main": "main.js",
   "scripts": {
@@ -9,6 +9,7 @@
     "build": "electron-builder --win --x64"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "express": "^4.18.2",
     "node-firebird": "^1.1.6"
   },
@@ -21,11 +22,19 @@
     "appId": "com.mt.clipp-painel",
     "productName": "Painel CLIPP",
     "copyright": "MT Automações",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "junin1737",
+        "repo": "analisemt"
+      }
+    ],
     "directories": {
       "output": "dist"
     },
     "files": [
       "main.js",
+      "preload.js",
       "server.js",
       "package.json",
       "node_modules/**",

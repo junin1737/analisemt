@@ -1,5 +1,6 @@
 'use strict';
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 
 const PORT = 5050;
@@ -7,6 +8,34 @@ let mainWindow;
 
 // Inicia o Express server no mesmo processo
 require('./server.js');
+
+// ─── Auto-update (GitHub Releases via electron-builder) ────────────────────
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = false;
+
+function sendUpdate(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
+autoUpdater.on('update-available',     (info) => sendUpdate('update:available', { version: info.version }));
+autoUpdater.on('update-not-available', (info) => sendUpdate('update:not-available', { version: info.version }));
+autoUpdater.on('download-progress',    (p)    => sendUpdate('update:progress', { percent: p.percent }));
+autoUpdater.on('update-downloaded',    (info) => sendUpdate('update:downloaded', { version: info.version }));
+autoUpdater.on('error',                (err)  => sendUpdate('update:error', err.message));
+
+ipcMain.handle('update:check', async () => {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { ok: true, version: result && result.updateInfo ? result.updateInfo.version : null };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('update:download', async () => {
+  try { await autoUpdater.downloadUpdate(); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('update:install', () => {
+  // Silencioso e reabre o app sozinho após instalar.
+  autoUpdater.quitAndInstall(true, true);
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -19,6 +48,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 

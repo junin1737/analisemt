@@ -1082,9 +1082,56 @@ async function salvarConfiguracoes() {
 }
 
 /* ===================== UPDATE ===================== */
+function isElectronUpdater() { return !!(window.updater && window.updater.isElectron); }
+
+function setUpdateBanner(msg, { showBtn = false, show = true } = {}) {
+  const banner = document.getElementById('updateBanner');
+  const msgEl  = document.getElementById('updateMsg');
+  const btnDl  = document.getElementById('updateBtn');
+  if (msgEl) msgEl.textContent = msg;
+  if (banner) banner.style.display = show ? 'flex' : 'none';
+  if (btnDl) btnDl.style.display = showBtn ? '' : 'none';
+}
+
+function wireUpdaterEvents() {
+  if (!isElectronUpdater()) return;
+  const btn = document.getElementById('btnAtualizarApp');
+  window.updater.onAvailable((info) => {
+    if (btn) { btn.classList.add('has-update'); btn.title = `Baixando v${info.version}…`; }
+    setUpdateBanner(`Nova versão v${info.version} disponível — baixando automaticamente…`, { showBtn:false });
+    window.updater.download();
+  });
+  window.updater.onNotAvailable(() => {
+    const msgEl = document.getElementById('configMsg');
+    if (msgEl) { msgEl.style.color='#2e7d32'; msgEl.textContent='✔ Você já está na versão mais recente.'; }
+    if (btn) btn.title = 'Versão atual (atualizado)';
+  });
+  window.updater.onProgress((p) => {
+    const pct = Math.round(p.percent || 0);
+    if (btn) btn.title = `Baixando atualização… ${pct}%`;
+    setUpdateBanner(`Baixando atualização… ${pct}%`, { showBtn:false });
+  });
+  window.updater.onDownloaded((info) => {
+    if (btn) btn.title = `Instalando v${info.version}…`;
+    setUpdateBanner(`Atualização v${info.version} pronta! Reiniciando o aplicativo…`, { showBtn:false });
+    setTimeout(() => window.updater.install(), 1500);
+  });
+  window.updater.onError((message) => {
+    if (btn) btn.title = 'Erro ao atualizar — clique para tentar de novo';
+    setUpdateBanner('Erro ao atualizar: ' + message, { showBtn:false });
+  });
+}
+
 async function checkUpdateClick() {
   const btn = document.getElementById('btnAtualizarApp');
   const msgEl = document.getElementById('configMsg');
+  if (isElectronUpdater()) {
+    if (btn) btn.title = 'Verificando atualização…';
+    const r = await window.updater.check();
+    if (!r.ok && msgEl) { msgEl.style.color='#c62828'; msgEl.textContent = 'Erro ao verificar atualização: ' + r.error; }
+    return; // resultado chega pelos eventos registrados em wireUpdaterEvents()
+  }
+  // Fallback quando roda fora do Electron (ex: start.bat / node server.js): abre a página da release.
   try {
     const r = await fetch('/api/check-update');
     const d = await r.json();
@@ -1277,8 +1324,11 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchAndInit(dbPath, host, parseInt(port)||3050, 'SYSDBA', 'masterkey', fbVer);
   });
 
-  // Verifica atualização em background (acende badge no botão se houver nova versão)
+  // Verifica atualização em background (baixa e instala sozinho no Electron;
+  // no navegador/dev, apenas acende o badge e abre a página da release).
+  wireUpdaterEvents();
   setTimeout(async () => {
+    if (isElectronUpdater()) { window.updater.check(); return; }
     try {
       const r = await fetch('/api/check-update');
       const d = await r.json();
