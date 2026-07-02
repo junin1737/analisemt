@@ -81,7 +81,7 @@
   }
   .filterbar button.preset.active { background: var(--accent2); color: #fff; border-color: var(--accent2); }
   .filterbar .customrange { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-  .filterbar select { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; }
+  .filterbar select, .filterbar input[type="date"] { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; font-family: inherit; }
   .filterbar .rangeLabel { font-size: 13px; font-weight: 600; color: var(--accent2); margin-left: auto; }
 
   .tabs { display: flex; gap: 4px; padding: 14px 40px 0; max-width: 1300px; margin: 0 auto; }
@@ -173,8 +173,8 @@
     <button class="preset" data-preset="all">Todo o período</button>
   </div>
   <div class="customrange">
-    De <select id="selDe"></select>
-    até <select id="selAte"></select>
+    De <input type="date" id="selDe">
+    até <input type="date" id="selAte">
   </div>
   <div class="rangeLabel" id="rangeLabel"></div>
 </div>
@@ -302,15 +302,69 @@ function filtroLabel(){
   return `${ms[0].label} – ${ms[ms.length-1].label} (${n} ${n===1?'mês':'meses'})`;
 }
 
+/* ===================== TENDÊNCIAS (histórico completo carregado, não filtra por período) ===================== */
+function tendenciaCondicionais(){
+  if (MESES.length < 6) return null;
+  const porMes = MESES.map(m => sum(DADOS.condicionais.mensal.filter(c=>c.ano===m.ano&&c.mes===m.mes),'qtd'));
+  const metade = Math.floor(porMes.length/2);
+  const antes = porMes.slice(0, metade), depois = porMes.slice(porMes.length-metade);
+  const mediaAntes = antes.reduce((a,b)=>a+b,0)/antes.length;
+  const mediaDepois = depois.reduce((a,b)=>a+b,0)/depois.length;
+  const diffAbs = mediaDepois - mediaAntes;
+  if (Math.abs(diffAbs) < 3) return null; // diferença pequena demais pra virar achado (evita ruído/ % absurdo com base perto de zero)
+  return { mediaAntes, mediaDepois, diffAbs };
+}
+function sazonalidadeVendas(){
+  const porMesCal = {};
+  MESES.forEach(m=>{
+    const vf = DADOS.vendas.mensal.find(x=>x.ano===m.ano&&x.mes===m.mes);
+    const vg = DADOS.vendas.naoFiscalMensal.find(x=>x.ano===m.ano&&x.mes===m.mes);
+    const tot = (vf?vf.total:0) + (vg?vg.total:0);
+    if (!porMesCal[m.mes]) porMesCal[m.mes] = {soma:0, n:0};
+    porMesCal[m.mes].soma += tot; porMesCal[m.mes].n++;
+  });
+  const medias = Object.entries(porMesCal).map(([mes,v])=>({mes:parseInt(mes), media: v.n?v.soma/v.n:0}));
+  if (medias.length < 8) return null;
+  const ordenadas = [...medias].sort((a,b)=>b.media-a.media);
+  const picos = ordenadas.slice(0,2).map(x=>MESES_PT[x.mes-1]);
+  const vale = ordenadas[ordenadas.length-1];
+  return { picos, vale: MESES_PT[vale.mes-1] };
+}
+
 /* ===================== FILTER BAR ===================== */
+function monthFirstDate(m){ return `${m.ano}-${String(m.mes).padStart(2,'0')}-01`; }
+function monthLastDate(m){ const d = new Date(m.ano, m.mes, 0); return `${m.ano}-${String(m.mes).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function idxFromDateStr(str){
+  if(!str) return null;
+  const [y,mo] = str.split('-').map(Number);
+  const idx = MESES_IDX.get(`${y}-${mo}`);
+  return idx===undefined ? null : idx;
+}
+function syncDateInputs(){
+  document.getElementById('selDe').value  = monthFirstDate(MESES[state.de]);
+  document.getElementById('selAte').value = monthLastDate(MESES[state.ate]);
+}
+
 function buildFilterBar(){
   const selDe = document.getElementById('selDe');
   const selAte = document.getElementById('selAte');
-  selDe.innerHTML = MESES.map(m=>`<option value="${m.idx}">${m.label}</option>`).join('');
-  selAte.innerHTML = MESES.map(m=>`<option value="${m.idx}">${m.label}</option>`).join('');
-  selDe.value = state.de; selAte.value = state.ate;
-  selDe.addEventListener('change', ()=>{ state.de = parseInt(selDe.value); if(state.de>state.ate){state.ate=state.de; selAte.value=state.ate;} markPreset(); renderAll(); });
-  selAte.addEventListener('change', ()=>{ state.ate = parseInt(selAte.value); if(state.ate<state.de){state.de=state.ate; selDe.value=state.de;} markPreset(); renderAll(); });
+  const minDate = monthFirstDate(MESES[0]), maxDate = monthLastDate(MESES[MESES.length-1]);
+  selDe.min = selAte.min = minDate;
+  selDe.max = selAte.max = maxDate;
+  syncDateInputs();
+
+  selDe.addEventListener('change', ()=>{
+    const idx = idxFromDateStr(selDe.value);
+    if(idx===null) { syncDateInputs(); return; }
+    state.de = idx; if(state.de>state.ate) state.ate = state.de;
+    syncDateInputs(); markPreset(); renderAll();
+  });
+  selAte.addEventListener('change', ()=>{
+    const idx = idxFromDateStr(selAte.value);
+    if(idx===null) { syncDateInputs(); return; }
+    state.ate = idx; if(state.ate<state.de) state.de = state.ate;
+    syncDateInputs(); markPreset(); renderAll();
+  });
 
   document.querySelectorAll('button.preset').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -318,7 +372,7 @@ function buildFilterBar(){
       const lastIdx = MESES.length-1;
       if(p==='all'){ state.de=0; state.ate=lastIdx; }
       else { const n=parseInt(p); state.de=Math.max(0,lastIdx-n+1); state.ate=lastIdx; }
-      selDe.value=state.de; selAte.value=state.ate;
+      syncDateInputs();
       markPreset(); renderAll();
     });
   });
@@ -418,6 +472,37 @@ function renderResumo(){
   const _cg = DADOS.contas.saldoPorConta.find(c=>c.conta==='Caixa Geral'); const caixaGeralSaldo = _cg ? _cg.saldo : 0;
   const cobreVencido = saldoTotal - pagVenc;
 
+  // Carteira de recebíveis (todas as datas, não filtra por período) — usada no callout e na linha de força de cobrança
+  const carteiraAberto = DADOS.receber.legado.aberto + sum(DADOS.receber.mensal,'aberto');
+  const carteiraVencido = DADOS.receber.legado.vencido + sum(DADOS.receber.mensal,'vencido');
+  const carteiraVencidoLegado = DADOS.receber.legado.vencido;
+
+  // Linhas de força — recalculadas a partir dos dados reais conectados (não são texto fixo)
+  const condTrend = tendenciaCondicionais();
+  const sazon = sazonalidadeVendas();
+  const ajuste = DADOS.contas.ajustesAchado;
+  const linhasForca = [];
+  linhasForca.push(`<b>Fiscalização seletiva de vendas:</b> a loja lança tudo no gerencial e só fiscaliza parte — no período selecionado, ${pct(naoFiscalTotal,movimentoTotal)} do movimento (${brl2(naoFiscalTotal)}) não gerou nota fiscal. Risco fiscal real a discutir com o cliente, mesmo sendo uma escolha deliberada. Ver aba <b>Vendas</b>.`);
+  if (carteiraAberto > 0) {
+    linhasForca.push(`<b>Cobrança:</b> ${pct(carteiraVencido,carteiraAberto)} do contas a receber em aberto (${brl2(carteiraAberto)}) está vencido — ${brl2(carteiraVencido)} no total${carteiraVencidoLegado>0?`, sendo ${brl2(carteiraVencidoLegado)} de títulos anteriores a jan/2025 (provável dívida de difícil recuperação)`:''}. Separar o recuperável do que já deveria ser baixado/negativado.`);
+  }
+  if (ctTotal > 0) {
+    linhasForca.push(`<b>A loja não conhece seus clientes:</b> ${pct(ctGen,ctTotal)} das vendas no período saem como "cliente genérico". É pré-requisito para qualquer ação de fidelidade/recompra identificar quem compra.`);
+  }
+  if (condTrend) {
+    const dir = condTrend.diffAbs>0 ? 'crescimento' : 'queda';
+    const variacao = condTrend.mediaAntes>=1
+      ? `(${condTrend.diffAbs>0?'+':''}${(condTrend.diffAbs/condTrend.mediaAntes*100).toFixed(0)}%) comparando a primeira e a segunda metade do histórico carregado`
+      : '— praticamente não havia condicionais na primeira metade do histórico carregado';
+    linhasForca.push(`<b>Condicionais em ${dir}:</b> o volume médio de pedidos por mês foi de ${condTrend.mediaAntes.toFixed(0)} para ${condTrend.mediaDepois.toFixed(0)} ${variacao} — vale acompanhar a taxa de conversão mês a mês para não deixar mercadoria presa fora da loja.`);
+  }
+  if (sazon) {
+    linhasForca.push(`<b>Sazonalidade:</b> maior movimento historicamente em ${sazon.picos.join(' e ')}; menor em ${sazon.vale} — planejar compra de mercadoria e caixa com antecedência.`);
+  }
+  if (ajuste.qtd > 0) {
+    linhasForca.push(`<b>Lançamento genérico no financeiro:</b> ${ajuste.texto} Ver aba <b>Contas a Pagar</b>.`);
+  }
+
   return `
   <div class="callout red" style="font-size:14px">
     <b>Ponto de atenção — vendas só no gerencial, sem nota fiscal:</b> no período selecionado, <b>${brl(naoFiscalTotal)}</b> em vendas
@@ -458,20 +543,15 @@ function renderResumo(){
   </section>
 
   <div class="callout red">
-    <b>Carteira total de recebíveis (todas as datas, sempre atual):</b> R$ 244.336,84 em aberto, sendo R$ 175.328,52 vencido —
-    R$ 77.314,42 desse vencido é de títulos emitidos <b>antes de jan/2025</b> (fora do período analisável aqui), provável dívida de difícil recuperação.
+    <b>Carteira total de recebíveis (todas as datas, sempre atual):</b> ${brl2(carteiraAberto)} em aberto, sendo ${brl2(carteiraVencido)} vencido${carteiraVencidoLegado>0?` —
+    ${brl2(carteiraVencidoLegado)} desse vencido é de títulos emitidos <b>antes de jan/2025</b> (fora do período analisável aqui), provável dívida de difícil recuperação.`:'.'}
     Veja a aba <b>Contas a Receber</b> para o detalhe completo.
   </div>
 
   <section class="panel">
     <h2>Linhas de força para a estratégia</h2>
     <ul class="insights">
-      <li><b>Fiscalização seletiva de vendas (prioridade máxima):</b> a loja lança tudo no gerencial e só fiscaliza parte (cartão/PIX quase sempre; dinheiro e fiado quase nunca) — risco fiscal real a ser discutido com o cliente, mesmo sendo uma escolha deliberada e não uma falha.</li>
-      <li><b>Cobrança é a prioridade nº 2:</b> mais da metade do contas a receber está vencido, boa parte antiga. Separar o recuperável do que já deveria ser baixado/negativado.</li>
-      <li><b>A loja não conhece seus clientes:</b> a maior parte das vendas sai como "cliente genérico". É pré-requisito para qualquer ação de fidelidade/recompra.</li>
-      <li><b>Condicionais em crescimento:</b> o volume de pedidos (experimentação) mais que dobrou desde dez/2025 — vale acompanhar a taxa de conversão mês a mês para não deixar mercadoria presa fora da loja.</li>
-      <li><b>Sazonalidade previsível:</b> picos em julho e dezembro, vale em janeiro-fevereiro — planejar compra de mercadoria e caixa com antecedência.</li>
-      <li><b>Lançamento genérico no financeiro (jan-jun/2025):</b> 45 lançamentos (R$ 35.994,66) foram parar numa conta "AJUSTES" em vez da conta/categoria certa — parece ter parado depois de jun/2025, mas vale confirmar com quem faz o financeiro se o processo realmente mudou. Ver aba <b>Contas a Pagar</b>.</li>
+      ${linhasForca.map(l=>`<li>${l}</li>`).join('') || '<li class="desc">Sem achados relevantes com os dados atuais.</li>'}
     </ul>
   </section>`;
 }
@@ -894,11 +974,12 @@ function renderReceber(){
   const pmrTotal = sum(pmrM,'total'), pmrDias = sum(pmrM,'somaDias');
   const pmr = pmrTotal ? (pmrDias/pmrTotal) : 0;
 
+  const origem = DADOS.receber.origemHistorico;
   return `<h2 style="margin-top:0">Contas a Receber</h2>
   <div class="callout red">
     <b>Por que o contas a receber emitido é maior que o faturamento fiscal:</b> contas a receber é gerado tanto por vendas fiscais (modelo 65)
     quanto pelas vendas sem nota (modelo "GR", ver aba Vendas) — para o cliente/loja, ambas geram o mesmo título a receber.
-    No histórico completo: R$ 882.103,59 em títulos vêm de vendas fiscais, R$ 1.180.350,88 vêm de vendas modelo GR, e R$ 442.300,38 não têm nenhuma nota de venda vinculada
+    No histórico completo: ${brl2(origem.fiscal)} em títulos vêm de vendas fiscais, ${brl2(origem.gerencial)} vêm de vendas modelo GR, e ${brl2(origem.semNota)} não têm nenhuma nota de venda vinculada
     (provavelmente parcelamentos/outros lançamentos diretos). Isso explica a diferença que antes parecia inconsistente.
   </div>` +
     ctaReceberPagarBlock('receber', 'Contas a Receber', DADOS.receber.mensal, DADOS.receber.legado, DADOS.receber.agingTotalHoje,
