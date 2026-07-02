@@ -1,0 +1,66 @@
+{
+  "name": "clipp-painel",
+  "version": "1.0.0",
+  "description": "Painel de análise CLIPP - MT Automações",
+  "main": "main.js",
+  "scripts": {
+    "start": "node server.js",
+    "electron": "electron .",
+    "build": "electron-builder --win --x64"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-firebird": "^1.1.6"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "png-to-ico": "^3.0.1"
+  },
+  "build": {
+    "appId": "com.mt.clipp-painel",
+    "productName": "Painel CLIPP",
+    "copyright": "MT Automações",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "server.js",
+      "package.json",
+      "node_modules/**",
+      "Painel/**",
+      "MTdll/**"
+    ],
+    "extraResources": [
+      {
+        "from": "MTdll/",
+        "to": "MTdll/",
+        "filter": [
+          "**/*.dll",
+          "**/*.DLL"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "financa.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "financa.ico",
+      "uninstallerIcon": "financa.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Painel CLIPP"
+    }
+  }
+}

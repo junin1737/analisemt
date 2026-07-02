@@ -1,0 +1,12 @@
+node_modules/
+dist/
+Banco/
+*.fdb
+*.FDB
+*.log
+build.log
+electron_out.txt
+electron_err.txt
+ver.txt
+ver_err.txt
+.claude/
