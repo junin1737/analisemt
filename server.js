@@ -494,16 +494,22 @@ async function buildDados(s, e, months) {
     console.log('pagar baixa+PMP+ajustes OK');
 
     // ── CONTAS ──────────────────────────────────────────────────────────────
-    const saldoR = await q(db, `SELECT DESCRICAO CONTA,
+    // NOTA: nao usar V.DESCRICAO para casar com TB_BANCO_CTA.DESCRICAO - a conta bancaria
+    // guarda o nome com sufixo "DESATIVADA" colado (ex: "SICOOBDESATIVADA"), enquanto a view
+    // usa o nome limpo do plano de contas (ex: "SICOOB") - o texto nunca bate. Usar COD_CONTA
+    // (via TB_BANCO_CTA.ID_CTAPLA -> TB_PLANO_CONTAS.COD_CONTA), que e a chave estavel real.
+    const saldoR = await q(db, `SELECT COD_CONTA, DESCRICAO CONTA,
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE 0 END) ENTRADAS,
       SUM(CASE WHEN TIPO='SAIDAS' THEN VALOR ELSE 0 END) SAIDAS,
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE -VALOR END) SALDO
-      FROM V_REL_FINAN_BANCOS_CAIXA GROUP BY 1 ORDER BY 4 DESC`);
+      FROM V_REL_FINAN_BANCOS_CAIXA GROUP BY 1,2 ORDER BY 5 DESC`);
 
-    const inativosR = await q(db, `SELECT B.DESCRICAO CONTA,
+    const inativosR = await q(db, `SELECT P.COD_CONTA, B.DESCRICAO CONTA,
       COALESCE(SUM(CASE WHEN V.TIPO='ENTRADAS' THEN V.VALOR ELSE -V.VALOR END),0) SALDO
-      FROM TB_BANCO_CTA B LEFT JOIN V_REL_FINAN_BANCOS_CAIXA V ON V.DESCRICAO=B.DESCRICAO
-      WHERE B.STATUS='I' GROUP BY B.DESCRICAO ORDER BY B.DESCRICAO`).catch(() => []);
+      FROM TB_BANCO_CTA B
+      JOIN TB_PLANO_CONTAS P ON P.ID_CTAPLA=B.ID_CTAPLA
+      LEFT JOIN V_REL_FINAN_BANCOS_CAIXA V ON V.COD_CONTA=P.COD_CONTA
+      WHERE B.STATUS='I' GROUP BY P.COD_CONTA, B.DESCRICAO ORDER BY B.DESCRICAO`).catch(() => []);
 
     const cgR = await q(db, `SELECT EXTRACT(YEAR FROM DT_MOVTO) ANO, EXTRACT(MONTH FROM DT_MOVTO) MES,
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE -VALOR END) SALDO_MES
@@ -511,7 +517,10 @@ async function buildDados(s, e, months) {
 
     const totR = await q(db, `SELECT EXTRACT(YEAR FROM DT_MOVTO) ANO, EXTRACT(MONTH FROM DT_MOVTO) MES,
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE -VALOR END) SALDO_MES
-      FROM V_REL_FINAN_BANCOS_CAIXA WHERE DESCRICAO<>'AJUSTES' GROUP BY 1,2 ORDER BY 1,2`);
+      FROM V_REL_FINAN_BANCOS_CAIXA
+      WHERE DESCRICAO<>'AJUSTES'
+        AND COD_CONTA NOT IN (SELECT P.COD_CONTA FROM TB_BANCO_CTA B JOIN TB_PLANO_CONTAS P ON P.ID_CTAPLA=B.ID_CTAPLA WHERE B.STATUS='I')
+      GROUP BY 1,2 ORDER BY 1,2`);
 
     const acertoR = await q(db, `SELECT DESCRICAO, TIPO, VALOR, DT_MOVTO, HISTORICO
       FROM V_REL_FINAN_BANCOS_CAIXA
@@ -640,8 +649,8 @@ async function buildDados(s, e, months) {
     };
 
     // ─ Contas ─
-    const inativasSet = new Set(inativosR.map(r=>String(r.CONTA||'')));
-    const saldoPorConta = saldoR.filter(r=>!inativasSet.has(String(r.CONTA||''))).map(r=>({conta:String(r.CONTA||''),entradas:r2(r.ENTRADAS),saidas:r2(r.SAIDAS),saldo:r2(r.SALDO)}));
+    const inativasSet = new Set(inativosR.map(r=>String(r.COD_CONTA||'')));
+    const saldoPorConta = saldoR.filter(r=>!inativasSet.has(String(r.COD_CONTA||''))).map(r=>({conta:String(r.CONTA||''),entradas:r2(r.ENTRADAS),saidas:r2(r.SAIDAS),saldo:r2(r.SALDO)}));
     const cgBK={}; cgR.forEach(r=>{cgBK[`${r.ANO}-${r.MES}`]=r;});
     const totBK={}; totR.forEach(r=>{totBK[`${r.ANO}-${r.MES}`]=r;});
     const allMonthKeys=new Set([...cgR,...totR].map(r=>`${r.ANO}-${r.MES}`));
