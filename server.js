@@ -210,9 +210,23 @@ async function buildDados(s, e, months) {
                CASE WHEN P.ID_STATUS=9 THEN 'Finalizado' WHEN P.ID_STATUS=2 THEN 'Reprovado' ELSE 'Em andamento' END
       ORDER BY 1,2,3`);
 
-    const condA = await q(db, `SELECT P.ID_PEDIDO, CAST(CURRENT_DATE-P.DT_PEDIDO AS INTEGER) DIAS, SUM(I.VLR_TOTAL-I.VLR_DESC) VALOR
-      FROM TB_PEDIDO_VENDA P JOIN TB_PED_VENDA_ITEM I ON I.ID_PEDIDO=P.ID_PEDIDO
-      WHERE P.ID_STATUS IN (1,7) GROUP BY 1,2 ORDER BY 2 DESC`);
+    const condA = await q(db, `SELECT P.ID_PEDIDO, P.DT_PEDIDO, C.NOME CLIENTE,
+      SUM(I.QTD_ITEM) QTDPECAS, SUM(I.VLR_TOTAL-I.VLR_DESC) VALOR
+      FROM TB_PEDIDO_VENDA P
+      JOIN TB_CLIENTE C ON C.ID_CLIENTE=P.ID_CLIENTE
+      JOIN TB_PED_VENDA_ITEM I ON I.ID_PEDIDO=P.ID_PEDIDO
+      WHERE P.ID_STATUS IN (1,7)
+      GROUP BY P.ID_PEDIDO, P.DT_PEDIDO, C.NOME
+      ORDER BY P.DT_PEDIDO`);
+
+    const condItensA = await q(db, `SELECT I.ID_PEDIDO, E.DESCRICAO PRODUTO,
+      SUM(I.QTD_ITEM) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) VLR
+      FROM TB_PED_VENDA_ITEM I
+      JOIN TB_EST_IDENTIFICADOR EI ON EI.ID_IDENTIFICADOR=I.ID_IDENTIFICADOR
+      JOIN TB_ESTOQUE E ON E.ID_ESTOQUE=EI.ID_ESTOQUE
+      WHERE EXISTS (SELECT 1 FROM TB_PEDIDO_VENDA P WHERE P.ID_PEDIDO=I.ID_PEDIDO AND P.ID_STATUS IN (1,7))
+      GROUP BY I.ID_PEDIDO, E.DESCRICAO
+      ORDER BY I.ID_PEDIDO, SUM(I.QTD_ITEM) DESC`);
 
     const condSI = await q(db, `SELECT COUNT(*) C FROM TB_PEDIDO_VENDA P
       WHERE P.ID_STATUS IN (1,2,7,9) AND NOT EXISTS (SELECT 1 FROM TB_PED_VENDA_ITEM I WHERE I.ID_PEDIDO=P.ID_PEDIDO)`);
@@ -488,7 +502,13 @@ async function buildDados(s, e, months) {
     const condicionais = {
       mensal: condM.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), status:String(r.STATUS||'').trim(), qtd:ri(r.QTD), valor:r2(r.VALOR) })),
       itensMensal: condI.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), status:String(r.STATUS||'').trim(), qtdPedidos:ri(r.QTD_PEDIDOS), qtdPecas:ri(r.QTD_PECAS), vlr:r2(r.VLR_ITENS) })),
-      abertosHoje: condA.map(r => ({ id:ri(r.ID_PEDIDO), dias:ri(r.DIAS), valor:r2(r.VALOR) })),
+      abertosHoje: condA.map(r => {
+        const hoje = new Date(); hoje.setHours(0,0,0,0);
+        const dt = r.DT_PEDIDO ? new Date(r.DT_PEDIDO) : null;
+        const dias = dt ? Math.round((hoje - dt) / 86400000) : 0;
+        return { id:ri(r.ID_PEDIDO), cliente:String(r.CLIENTE||'').trim(), dtPedido:dt?dt.toISOString().slice(0,10):null, dias, qtdPecas:ri(r.QTDPECAS), valor:r2(r.VALOR) };
+      }),
+      abertosItens: condItensA.map(r => ({ id:ri(r.ID_PEDIDO), produto:String(r.PRODUTO||'').trim(), qtd:ri(r.QTD), vlr:r2(r.VLR) })),
       pedidosSemItem: semItemN,
       nota: `Total de ${totN} registros.${semItemN>0?' '+semItemN+' pedido(s) sem item.':''}`,
     };
