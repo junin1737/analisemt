@@ -482,7 +482,9 @@ function renderResumo(){
   const sazon = sazonalidadeVendas();
   const ajuste = DADOS.contas.ajustesAchado;
   const linhasForca = [];
-  linhasForca.push(`<b>Fiscalização seletiva de vendas:</b> a loja lança tudo no gerencial e só fiscaliza parte — no período selecionado, ${pct(naoFiscalTotal,movimentoTotal)} do movimento (${brl2(naoFiscalTotal)}) não gerou nota fiscal. Risco fiscal real a discutir com o cliente, mesmo sendo uma escolha deliberada. Ver aba <b>Vendas</b>.`);
+  if (naoFiscalTotal > 0) {
+    linhasForca.push(`<b>Fiscalização seletiva de vendas:</b> a loja lança tudo no gerencial e só fiscaliza parte — no período selecionado, ${pct(naoFiscalTotal,movimentoTotal)} do movimento (${brl2(naoFiscalTotal)}) não gerou nota fiscal. Risco fiscal real a discutir com o cliente, mesmo sendo uma escolha deliberada. Ver aba <b>Vendas</b>.`);
+  }
   if (carteiraAberto > 0) {
     linhasForca.push(`<b>Cobrança:</b> ${pct(carteiraVencido,carteiraAberto)} do contas a receber em aberto (${brl2(carteiraAberto)}) está vencido — ${brl2(carteiraVencido)} no total${carteiraVencidoLegado>0?`, sendo ${brl2(carteiraVencidoLegado)} de títulos anteriores a jan/2025 (provável dívida de difícil recuperação)`:''}. Separar o recuperável do que já deveria ser baixado/negativado.`);
   }
@@ -504,17 +506,17 @@ function renderResumo(){
   }
 
   return `
-  <div class="callout red" style="font-size:14px">
+  ${naoFiscalTotal>0 ? `<div class="callout red" style="font-size:14px">
     <b>Ponto de atenção — vendas só no gerencial, sem nota fiscal:</b> no período selecionado, <b>${brl(naoFiscalTotal)}</b> em vendas
     (modelo "GR") não foram fiscalizadas (não geraram NFC-e) — isso é <b>${pct(naoFiscalTotal,movimentoTotal)}</b> do movimento total estimado de
     ${brl(movimentoTotal)}. É uma escolha operacional do negócio (toda venda entra no gerencial, só parte é "passada pro fiscal" depois — sobretudo cartão e PIX),
     não falha de sistema, mas é uma exposição fiscal real que vale levar ao cliente. Ver aba <b>Vendas</b> para o detalhe por forma de pagamento e mês a mês.
-  </div>
+  </div>` : ''}
 
   <div class="kpis">
     <div class="kpi"><div class="label">Faturamento total (movimento)</div><div class="value">${brl(movimentoTotal)}</div><div class="sub">fiscal + gerencial</div></div>
     <div class="kpi"><div class="label">Faturamento fiscal (NFC-e)</div><div class="value">${brl(fat)}</div><div class="sub">${qtd} vendas · ${pct(fat,movimentoTotal)} do total</div></div>
-    <div class="kpi bad"><div class="label">Faturamento gerencial (sem NF)</div><div class="value">${brl(naoFiscalTotal)}</div><div class="sub">${pct(naoFiscalTotal,movimentoTotal)} do total</div></div>
+    <div class="kpi ${naoFiscalTotal>0?'bad':''}"><div class="label">Faturamento gerencial (sem NF)</div><div class="value">${brl(naoFiscalTotal)}</div><div class="sub">${pct(naoFiscalTotal,movimentoTotal)} do total</div></div>
     <div class="kpi"><div class="label">Ticket médio</div><div class="value">${brl2(ticket)}</div><div class="sub">faturamento fiscal ÷ qtd. vendas</div></div>
     <div class="kpi ${cancQtd>0?'warn':''}"><div class="label">Vendas canceladas (fiscal + gerencial)</div><div class="value">${brl(cancTotal)}</div><div class="sub">${brutoTotal>0?`${brl2(brutoTotal)} bruto − ${brl2(cancTotal)} cancelado = ${brl2(movimentoTotal)} líquido`:'sem cancelamentos no período'}</div></div>
     <div class="kpi ${margemPct<40?'warn':''}"><div class="label">Margem bruta estimada (CMV ajustado)</div><div class="value">${margemPct.toFixed(0)}%</div><div class="sub">${brl(movimentoTotal-cmvEstimado)} sobre ${brl(movimentoTotal)} — CMV inclui estimativa para itens vendidos sem custo cadastrado, ver aba Estoque</div></div>
@@ -623,15 +625,15 @@ function renderVendas(){
 
   <section class="panel">
     <h2>Vendas fiscais (modelo 65) vs. só gerencial (modelo GR)</h2>
-    <div class="desc">O cliente lança toda venda no gerencial e fiscaliza (gera NFC-e) só parte delas — em geral cartão e PIX. Ver detalhe por forma de pagamento abaixo.</div>
+    <div class="desc">${naoFiscalTotal>0 ? 'O cliente lança toda venda no gerencial e fiscaliza (gera NFC-e) só parte delas — em geral cartão e PIX. Ver detalhe por forma de pagamento abaixo.' : 'Neste período, toda venda gerou nota fiscal (NFC-e) — não há venda só no gerencial (modelo GR).'}</div>
     <div class="kpis" style="margin-bottom:10px">
       <div class="kpi"><div class="label">Fiscal (NFC-e)</div><div class="value">${brl(fat)}</div></div>
-      <div class="kpi bad"><div class="label">Sem NF (GR)</div><div class="value">${brl(naoFiscalTotal)}</div><div class="sub">${pct(naoFiscalTotal,movimentoTotal)} do total</div></div>
+      <div class="kpi ${naoFiscalTotal>0?'bad':''}"><div class="label">Sem NF (GR)</div><div class="value">${brl(naoFiscalTotal)}</div><div class="sub">${pct(naoFiscalTotal,movimentoTotal)} do total</div></div>
       <div class="kpi"><div class="label">Movimento total estimado</div><div class="value">${brl(movimentoTotal)}</div></div>
     </div>
     <div class="barchart">${grChart}</div>
     <div class="legend" style="margin-top:8px"><span><span class="dot" style="background:#2c3e6b"></span>Fiscal (65)</span><span><span class="dot" style="background:#c62828"></span>Sem NF (GR)</span></div>
-    <div class="callout red" style="margin-top:12px">${DADOS.vendas.naoFiscalNota}</div>
+    ${naoFiscalTotal>0 ? `<div class="callout red" style="margin-top:12px">${DADOS.vendas.naoFiscalNota}</div>` : ''}
   </section>
 
   <div class="grid2">
