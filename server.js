@@ -2,7 +2,26 @@
 const express = require('express');
 const Firebird = require('node-firebird');
 const path = require('path');
+const fs   = require('fs');
+const os   = require('os');
 const { execSync } = require('child_process');
+
+// ─── Configuração local de usuários ─────────────────────────────────────────
+function getConfigPath() {
+  const dir = path.join(process.env.APPDATA || path.join(os.homedir(), '.config'), 'Painel CLIPP');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'usuarios.json');
+}
+const PERM_DEFAULT = { resumo:true, vendas:true, estoque:true, receber:true, pagar:true, equilibrio:true, contas:true };
+const CONFIG_DEFAULT = {
+  usuarios: [{ id:0, nome:'Supervisor', senha:'18321937', supervisor:true, permissoes:{ ...PERM_DEFAULT } }]
+};
+function loadConfig() {
+  const p = getConfigPath();
+  if (!fs.existsSync(p)) { saveConfig(CONFIG_DEFAULT); return JSON.parse(JSON.stringify(CONFIG_DEFAULT)); }
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch(e) { return JSON.parse(JSON.stringify(CONFIG_DEFAULT)); }
+}
+function saveConfig(cfg) { fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8'); }
 
 const app = express();
 app.use(express.json());
@@ -614,6 +633,53 @@ async function buildDados(s, e, months) {
 }
 
 // ─── Endpoints ───────────────────────────────────────────────────────────────
+
+app.get('/api/funcionarios', async (req, res) => {
+  try {
+    const db = await attachDb();
+    let rows = [];
+    try { rows = await q(db, `SELECT ID_FUNCIONARIO, NOME FROM TB_FUNCIONARIO ORDER BY NOME`); }
+    finally { try { db.detach(); } catch(e){} }
+    const cfg = loadConfig();
+    const cfgIds = new Set(cfg.usuarios.map(u => u.id));
+    for (const r of rows) {
+      const id = ri(r.ID_FUNCIONARIO);
+      if (!cfgIds.has(id)) {
+        cfg.usuarios.push({ id, nome:String(r.NOME||'').trim(), senha:'', supervisor:false, permissoes:{ ...PERM_DEFAULT } });
+        cfgIds.add(id);
+      } else {
+        const u = cfg.usuarios.find(u => u.id === id);
+        if (u && !u.nome) u.nome = String(r.NOME||'').trim();
+      }
+    }
+    saveConfig(cfg);
+    res.json({ ok:true, usuarios: cfg.usuarios.map(u=>({ id:u.id, nome:u.nome, supervisor:!!u.supervisor })) });
+  } catch(e) { res.json({ ok:false, error:e.message }); }
+});
+
+app.post('/api/login', (req, res) => {
+  const { id, senha } = req.body;
+  const cfg = loadConfig();
+  const user = cfg.usuarios.find(u => u.id === parseInt(id));
+  if (!user) return res.json({ ok:false, error:'Usuário não encontrado.' });
+  if (user.senha !== String(senha||'')) return res.json({ ok:false, error:'Senha incorreta.' });
+  res.json({ ok:true, id:user.id, nome:user.nome, supervisor:!!user.supervisor, permissoes:user.permissoes||PERM_DEFAULT });
+});
+
+app.get('/api/config-usuarios', (req, res) => {
+  res.json({ ok:true, usuarios: loadConfig().usuarios });
+});
+
+app.put('/api/config-usuarios', (req, res) => {
+  const { supervisorSenha, usuarios } = req.body;
+  const cfg = loadConfig();
+  const sup = cfg.usuarios.find(u => u.supervisor);
+  if (!sup || sup.senha !== String(supervisorSenha||'')) return res.json({ ok:false, error:'Senha de supervisor inválida.' });
+  cfg.usuarios = usuarios;
+  saveConfig(cfg);
+  res.json({ ok:true });
+});
+
 app.get('/api/browse', async (req, res) => {
   // Electron: usa dialog nativo (aparece na frente da janela do app)
   if (process.versions.electron) {
