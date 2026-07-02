@@ -385,12 +385,15 @@ async function buildDados(s, e, months) {
     console.log('por forma OK');
 
     // Origem do contas a receber (histórico completo): quanto vem de venda fiscal (65),
-    // gerencial (GR) ou não tem nenhuma nota vinculada — explica por que o total emitido
-    // costuma ser maior que o faturamento fiscal sozinho.
+    // gerencial (GR) ou outro caso (sem nota vinculada, referência quebrada, ou modelo
+    // diferente de 65/GR, ex: NF-e '55'). O 3º balde é "resto" (NOT IN 65/GR, incluindo NULL)
+    // de propósito, pra garantir que FISCAL+GERENCIAL+OUTRO sempre bata com o total geral
+    // (não pode "vazar" valor se aparecer um NF_MODELO ou FK quebrada não previstos aqui).
     const recOrigemR = await q(db, `SELECT
+      SUM(R.VLR_CTAREC) TOTAL,
       SUM(CASE WHEN N.NF_MODELO='65' THEN R.VLR_CTAREC ELSE 0 END) FISCAL,
       SUM(CASE WHEN N.NF_MODELO='GR' THEN R.VLR_CTAREC ELSE 0 END) GERENCIAL,
-      SUM(CASE WHEN R.ID_NFVENDA IS NULL THEN R.VLR_CTAREC ELSE 0 END) SEM_NOTA
+      SUM(CASE WHEN N.NF_MODELO IS NULL OR N.NF_MODELO NOT IN ('65','GR') THEN R.VLR_CTAREC ELSE 0 END) OUTRO
       FROM V_CONTAS_RECEBER R
       LEFT JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA`);
     console.log('origem receber OK');
@@ -603,7 +606,7 @@ async function buildDados(s, e, months) {
     const recOrigem = recOrigemR[0] || {};
     const receber = {
       legado: recLegado,
-      origemHistorico: { fiscal: r2(recOrigem.FISCAL), gerencial: r2(recOrigem.GERENCIAL), semNota: r2(recOrigem.SEM_NOTA) },
+      origemHistorico: { fiscal: r2(recOrigem.FISCAL), gerencial: r2(recOrigem.GERENCIAL), semNota: r2(recOrigem.OUTRO) },
       mensal: months.map(m=>{const r=recBK[`${m.ano}-${m.mes}`]||null; return {ano:m.ano,mes:m.mes,qtd:r?ri(r.QTD):0,emit:r?r2(r.EMIT):0,aberto:r?r2(r.ABERTO):0,vencido:r?r2(r.VENCIDO):0,recebido:r?r2(r.RECEBIDO):0};}),
       agingTotalHoje: ['1','2','3','4','5','6'].map(code=>{
         const row=agingR.find(r=>String(r.FAIXA||'').trim()===code);
