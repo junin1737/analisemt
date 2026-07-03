@@ -520,22 +520,35 @@ async function buildDados(s, e, months) {
     console.log('pagar baixa+PMP+ajustes OK');
 
     // ── CONTAS ──────────────────────────────────────────────────────────────
-    // NOTA: nao usar V.DESCRICAO para casar com TB_BANCO_CTA.DESCRICAO - a conta bancaria
-    // guarda o nome com sufixo "DESATIVADA" colado (ex: "SICOOBDESATIVADA"), enquanto a view
-    // usa o nome limpo do plano de contas (ex: "SICOOB") - o texto nunca bate. Usar COD_CONTA
-    // (via TB_BANCO_CTA.ID_CTAPLA -> TB_PLANO_CONTAS.COD_CONTA), que e a chave estavel real.
-    const saldoR = await q(db, `SELECT COD_CONTA, DESCRICAO CONTA,
+    // IMPORTANTE: o saldo "de hoje" de cada conta bancária vem de TB_BANCO_CTA.SD_REAL,
+    // não de SUM(entradas-saídas) - confirmado via os triggers do CLIPP (TB_BANCO_CTA_MOVTO_AI/AU0)
+    // que esse campo é mantido ao vivo pelo próprio sistema a cada movimentação/conciliação,
+    // e é exatamente o que a tela "Controle Bancário > Saldo Real" do CLIPP mostra. Recalcular
+    // via soma de movimentos (como antes) diverge do saldo real sempre que existe saldo de
+    // abertura anterior ao histórico somado ou algum lançamento fora do fluxo normal.
+    // "Caixa Geral" não tem linha em TB_BANCO_CTA (a view trata id_ctapla=5 à parte, sem
+    // vínculo com conta bancária) - só essa continua calculada por entradas-saídas.
+    const saldoR = await q(db, `SELECT B.DESCRICAO CONTA, B.SD_REAL SALDO,
+      COALESCE(V.ENTRADAS,0) ENTRADAS, COALESCE(V.SAIDAS,0) SAIDAS
+      FROM TB_BANCO_CTA B
+      JOIN TB_PLANO_CONTAS P ON P.ID_CTAPLA=B.ID_CTAPLA
+      LEFT JOIN (
+        SELECT COD_CONTA,
+          SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE 0 END) ENTRADAS,
+          SUM(CASE WHEN TIPO='SAIDAS' THEN VALOR ELSE 0 END) SAIDAS
+        FROM V_REL_FINAN_BANCOS_CAIXA GROUP BY COD_CONTA
+      ) V ON V.COD_CONTA=P.COD_CONTA
+      WHERE B.STATUS='A'
+      ORDER BY B.SD_REAL DESC`);
+
+    const caixaGeralHojeR = await q(db, `SELECT
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE 0 END) ENTRADAS,
       SUM(CASE WHEN TIPO='SAIDAS' THEN VALOR ELSE 0 END) SAIDAS,
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE -VALOR END) SALDO
-      FROM V_REL_FINAN_BANCOS_CAIXA GROUP BY 1,2 ORDER BY 5 DESC`);
+      FROM V_REL_FINAN_BANCOS_CAIXA WHERE DESCRICAO='Caixa Geral'`);
 
-    const inativosR = await q(db, `SELECT P.COD_CONTA, B.DESCRICAO CONTA,
-      COALESCE(SUM(CASE WHEN V.TIPO='ENTRADAS' THEN V.VALOR ELSE -V.VALOR END),0) SALDO
-      FROM TB_BANCO_CTA B
-      JOIN TB_PLANO_CONTAS P ON P.ID_CTAPLA=B.ID_CTAPLA
-      LEFT JOIN V_REL_FINAN_BANCOS_CAIXA V ON V.COD_CONTA=P.COD_CONTA
-      WHERE B.STATUS='I' GROUP BY P.COD_CONTA, B.DESCRICAO ORDER BY B.DESCRICAO`).catch(() => []);
+    const inativosR = await q(db, `SELECT DESCRICAO CONTA, SD_REAL SALDO
+      FROM TB_BANCO_CTA WHERE STATUS='I' ORDER BY DESCRICAO`).catch(() => []);
 
     const cgR = await q(db, `SELECT EXTRACT(YEAR FROM DT_MOVTO) ANO, EXTRACT(MONTH FROM DT_MOVTO) MES,
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE -VALOR END) SALDO_MES
@@ -675,8 +688,13 @@ async function buildDados(s, e, months) {
     };
 
     // ─ Contas ─
-    const inativasSet = new Set(inativosR.map(r=>String(r.COD_CONTA||'')));
-    const saldoPorConta = saldoR.filter(r=>!inativasSet.has(String(r.COD_CONTA||''))).map(r=>({conta:String(r.CONTA||''),entradas:r2(r.ENTRADAS),saidas:r2(r.SAIDAS),saldo:r2(r.SALDO)}));
+    // saldoR já vem só com contas ativas (STATUS='A' filtrado na query); Caixa Geral entra
+    // à parte pois não tem linha em TB_BANCO_CTA (sem SD_REAL), então continua vindo do fluxo.
+    const saldoPorConta = saldoR.map(r=>({conta:String(r.CONTA||''),entradas:r2(r.ENTRADAS),saidas:r2(r.SAIDAS),saldo:r2(r.SALDO)}));
+    if (caixaGeralHojeR[0]) {
+      const cg = caixaGeralHojeR[0];
+      saldoPorConta.push({conta:'Caixa Geral', entradas:r2(cg.ENTRADAS), saidas:r2(cg.SAIDAS), saldo:r2(cg.SALDO)});
+    }
     const cgBK={}; cgR.forEach(r=>{cgBK[`${r.ANO}-${r.MES}`]=r;});
     const totBK={}; totR.forEach(r=>{totBK[`${r.ANO}-${r.MES}`]=r;});
     const allMonthKeys=new Set([...cgR,...totR].map(r=>`${r.ANO}-${r.MES}`));
@@ -690,7 +708,7 @@ async function buildDados(s, e, months) {
     }
     const inativasNomes=inativosR.map(r=>r.CONTA).join(', ');
     const contas = {
-      nota: `Saldo calculado como entradas menos saídas no sistema — pode não bater com extrato bancário real (saldo anterior ao histórico não incluído).${inativasNomes?' Contas inativas ocultadas: '+inativasNomes+'.':''} "AJUSTES" incluída propositalmente — alto volume indica lançamentos genéricos.`,
+      nota: `Saldo de cada conta é o "Saldo Real" mantido pelo próprio CLIPP (Controle Bancário) — exceto Caixa Geral, calculado como entradas menos saídas no sistema desde jan/2025 (pode não bater com o extrato real, saldo anterior ao histórico não incluído).${inativasNomes?' Contas inativas ocultadas: '+inativasNomes+'.':''} "AJUSTES" incluída propositalmente — alto volume indica lançamentos genéricos.`,
       saldoPorConta,
       contasInativasOcultas: inativosR.map(r=>({conta:String(r.CONTA||''),saldo:r2(r.SALDO)})),
       caixaGeralMensal: sortedMK.map(m=>({ano:m.ano,mes:m.mes,saldoMes:cgBK[`${m.ano}-${m.mes}`]?r2(cgBK[`${m.ano}-${m.mes}`].SALDO_MES):0})),

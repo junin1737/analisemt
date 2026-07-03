@@ -532,7 +532,7 @@ function renderResumo(){
   <div class="callout ${cobreVencido>=0?'blue':'red'}">
     <b>Saldo em caixa cobre o contas a pagar vencido hoje?</b> ${brl2(saldoTotal)} em caixa/contas (todas, hoje) ${cobreVencido>=0?'é suficiente pra cobrir':'NÃO é suficiente pra cobrir'} os ${brl2(pagVenc)}
     de contas a pagar já vencidas — ${cobreVencido>=0?`sobrariam ${brl2(cobreVencido)}`:`faltariam ${brl2(-cobreVencido)}`}.
-    Esse saldo é o acumulado registrado no sistema desde jan/2025 (entradas − saídas) — não é necessariamente igual ao extrato bancário real, vale confirmar. Ver aba <b>Saldo das Contas</b>.
+    Esse saldo usa o "Saldo Real" de cada conta mantido pelo próprio CLIPP, exceto Caixa Geral (calculado por entradas − saídas desde jan/2025, pode não bater com o extrato real). Ver aba <b>Saldo das Contas</b>.
   </div>
 
   <section class="panel">
@@ -761,7 +761,7 @@ function renderContas(){
   });
 
   return `
-  <div class="callout muted">Esta aba não muda com o filtro de período — saldo é acumulado (igual ao estoque), não um fluxo de um período específico. Mostra o histórico completo desde jan/2025.</div>
+  <div class="callout muted">Esta aba não muda com o filtro de período — o saldo é a foto de hoje de cada conta (igual ao estoque), não um fluxo de um período específico. Entradas/saídas mostradas na tabela somam o histórico completo desde jan/2025.</div>
   ${DADOS.contas.acertoCaixaAchado.texto ? `<div class="callout red"><b>Achado urgente — Acerto de Caixa detectado:</b> ${DADOS.contas.acertoCaixaAchado.texto}</div>` : ''}
   <div class="callout blue">${DADOS.contas.nota}</div>
   <div class="kpis">
