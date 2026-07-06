@@ -644,8 +644,8 @@ function renderVendas(){
       <tbody>${prod.map(p=>`<tr><td>${p.nome}</td><td class="num">${num(p.qtd)}</td><td class="num">${brl2(p.total)}</td></tr>`).join('') || '<tr><td colspan=3>Sem dados no período</td></tr>'}</tbody></table>
     </section>
     <section class="panel">
-      <h2>Top vendedoras</h2>
-      <table><thead><tr><th>Vendedora</th><th class="num">Vendas</th><th class="num">Total</th></tr></thead>
+      <h2>Top vendedores</h2>
+      <table><thead><tr><th>Vendedor</th><th class="num">Vendas</th><th class="num">Total</th></tr></thead>
       <tbody>${vend.map(v=>`<tr><td>${v.nome}</td><td class="num">${num(v.qtd)}</td><td class="num">${brl2(v.total)}</td></tr>`).join('') || '<tr><td colspan=3>Sem dados no período</td></tr>'}</tbody></table>
     </section>
   </div>
