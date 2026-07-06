@@ -732,9 +732,11 @@ app.get('/api/funcionarios', async (req, res) => {
   try {
     const db = await attachDb();
     let rows = [];
-    try { rows = await q(db, `SELECT ID_FUNCIONARIO, NOME FROM TB_FUNCIONARIO ORDER BY NOME`); }
+    // Só funcionários ativos no CLIPP (STATUS='A'); NULL entra também (nunca foi desativado).
+    try { rows = await q(db, `SELECT ID_FUNCIONARIO, NOME FROM TB_FUNCIONARIO WHERE STATUS='A' OR STATUS IS NULL ORDER BY NOME`); }
     finally { try { db.detach(); } catch(e){} }
     const cfg = loadConfig();
+    const ativosIds = new Set(rows.map(r => ri(r.ID_FUNCIONARIO)));
     const cfgIds = new Set(cfg.usuarios.map(u => u.id));
     for (const r of rows) {
       const id = ri(r.ID_FUNCIONARIO);
@@ -746,6 +748,8 @@ app.get('/api/funcionarios', async (req, res) => {
         if (u && !u.nome) u.nome = String(r.NOME||'').trim();
       }
     }
+    // Remove da lista local quem não é mais funcionário ativo (o Supervisor, marcador sintético, nunca sai).
+    cfg.usuarios = cfg.usuarios.filter(u => u.supervisor || ativosIds.has(u.id));
     saveConfig(cfg);
     res.json({ ok:true, usuarios: cfg.usuarios.map(u=>({ id:u.id, nome:u.nome, supervisor:!!u.supervisor })) });
   } catch(e) { res.json({ ok:false, error:e.message }); }
