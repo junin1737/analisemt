@@ -472,12 +472,16 @@ function renderResumo(){
   })();
   const saldoTotal = sum(DADOS.contas.saldoPorConta,'saldo');
   const _cg = DADOS.contas.saldoPorConta.find(c=>c.conta==='Caixa Geral'); const caixaGeralSaldo = _cg ? _cg.saldo : 0;
-  const cobreVencido = saldoTotal - pagVenc;
 
   // Carteira de recebíveis (todas as datas, não filtra por período) — usada no callout e na linha de força de cobrança
   const carteiraAberto = DADOS.receber.legado.aberto + sum(DADOS.receber.mensal,'aberto');
   const carteiraVencido = DADOS.receber.legado.vencido + sum(DADOS.receber.mensal,'vencido');
   const carteiraVencidoLegado = DADOS.receber.legado.vencido;
+
+  // Carteira de contas a pagar vencida "hoje" (todas as datas, não filtra por período) — mesmo
+  // critério da carteira de recebíveis acima, usado no callout "saldo cobre a pagar vencido".
+  const pagarVencidoHoje = DADOS.pagar.legado.vencido + sum(DADOS.pagar.mensal,'vencido');
+  const cobreVencido = saldoTotal - pagarVencidoHoje;
 
   // Linhas de força — recalculadas a partir dos dados reais conectados (não são texto fixo)
   const condTrend = tendenciaCondicionais();
@@ -488,7 +492,7 @@ function renderResumo(){
     linhasForca.push(`<b>Fiscalização seletiva de vendas:</b> a loja lança tudo no gerencial e só fiscaliza parte — no período selecionado, ${pct(naoFiscalTotal,movimentoTotal)} do movimento (${brl2(naoFiscalTotal)}) não gerou nota fiscal. Risco fiscal real a discutir com o cliente, mesmo sendo uma escolha deliberada. Ver aba <b>Vendas</b>.`);
   }
   if (carteiraAberto > 0) {
-    linhasForca.push(`<b>Cobrança:</b> ${pct(carteiraVencido,carteiraAberto)} do contas a receber em aberto (${brl2(carteiraAberto)}) está vencido — ${brl2(carteiraVencido)} no total${carteiraVencidoLegado>0?`, sendo ${brl2(carteiraVencidoLegado)} de títulos anteriores a jan/2025 (provável dívida de difícil recuperação)`:''}. Separar o recuperável do que já deveria ser baixado/negativado.`);
+    linhasForca.push(`<b>Cobrança:</b> ${pct(carteiraVencido,carteiraAberto)} do contas a receber em aberto (${brl2(carteiraAberto)}) está vencido — ${brl2(carteiraVencido)} no total${carteiraVencidoLegado>0?`, sendo ${brl2(carteiraVencidoLegado)} de títulos anteriores a ${monthLabel(MESES[0].ano,MESES[0].mes)} (provável dívida de difícil recuperação)`:''}. Separar o recuperável do que já deveria ser baixado/negativado.`);
   }
   if (ctTotal > 0) {
     linhasForca.push(`<b>A loja não conhece seus clientes:</b> ${pct(ctGen,ctTotal)} das vendas no período saem como "cliente genérico". É pré-requisito para qualquer ação de fidelidade/recompra identificar quem compra.`);
@@ -532,9 +536,9 @@ function renderResumo(){
   ${DADOS.contas.acertoCaixaAchado.texto ? `<div class="callout red"><b>Achado urgente — Acerto de Caixa detectado:</b> ${DADOS.contas.acertoCaixaAchado.texto}</div>` : ''}
 
   <div class="callout ${cobreVencido>=0?'blue':'red'}">
-    <b>Saldo em caixa cobre o contas a pagar vencido hoje?</b> ${brl2(saldoTotal)} em caixa/contas (todas, hoje) ${cobreVencido>=0?'é suficiente pra cobrir':'NÃO é suficiente pra cobrir'} os ${brl2(pagVenc)}
-    de contas a pagar já vencidas — ${cobreVencido>=0?`sobrariam ${brl2(cobreVencido)}`:`faltariam ${brl2(-cobreVencido)}`}.
-    Esse saldo usa o "Saldo Real" de cada conta mantido pelo próprio CLIPP, exceto Caixa Geral (calculado por entradas − saídas desde jan/2025, pode não bater com o extrato real). Ver aba <b>Saldo das Contas</b>.
+    <b>Saldo em caixa cobre o contas a pagar vencido hoje?</b> ${brl2(saldoTotal)} em caixa/contas (todas, hoje) ${cobreVencido>=0?'é suficiente pra cobrir':'NÃO é suficiente pra cobrir'} os ${brl2(pagarVencidoHoje)}
+    de contas a pagar já vencidas (carteira completa, não só o período filtrado) — ${cobreVencido>=0?`sobrariam ${brl2(cobreVencido)}`:`faltariam ${brl2(-cobreVencido)}`}.
+    Esse saldo usa o "Saldo Real" de cada conta mantido pelo próprio CLIPP, exceto Caixa Geral (calculado por entradas − saídas de todo o histórico disponível no sistema, pode não bater com o extrato real). Ver aba <b>Saldo das Contas</b>.
   </div>
 
   <section class="panel">
@@ -548,7 +552,7 @@ function renderResumo(){
 
   <div class="callout red">
     <b>Carteira total de recebíveis (todas as datas, sempre atual):</b> ${brl2(carteiraAberto)} em aberto, sendo ${brl2(carteiraVencido)} vencido${carteiraVencidoLegado>0?` —
-    ${brl2(carteiraVencidoLegado)} desse vencido é de títulos emitidos <b>antes de jan/2025</b> (fora do período analisável aqui), provável dívida de difícil recuperação.`:'.'}
+    ${brl2(carteiraVencidoLegado)} desse vencido é de títulos emitidos <b>antes de ${monthLabel(MESES[0].ano,MESES[0].mes)}</b> (fora do período analisável aqui), provável dívida de difícil recuperação.`:'.'}
     Veja a aba <b>Contas a Receber</b> para o detalhe completo.
   </div>
 
@@ -582,9 +586,7 @@ function renderVendas(){
 
   const cond = periodArr(DADOS.condicionais.mensal);
   const condFin = cond.filter(c=>c.status==='Finalizado'); const condRep = cond.filter(c=>c.status==='Reprovado');
-  const condAnd = cond.filter(c=>c.status==='Em andamento');
   const qFin = sum(condFin,'qtd'), qRep = sum(condRep,'qtd'), vFin = sum(condFin,'valor');
-  const qAnd = sum(condAnd,'qtd'), vAnd = sum(condAnd,'valor');
   const qTotal = sum(cond,'qtd');
   const taxa = (qFin+qRep) ? pct(qFin,qFin+qRep) : '—';
 
@@ -593,6 +595,14 @@ function renderVendas(){
   const pecasRep = sum(condItens.filter(c=>c.status==='Reprovado'),'qtdPecas');
   const pecasAnd = sum(condItens.filter(c=>c.status==='Em andamento'),'qtdPecas');
   const pecasTotal = pecasFin + pecasRep + pecasAnd;
+
+  // "Em andamento (hoje)" tem que usar a mesma base do botão Detalhes (abertosHoje - todos
+  // os condicionais ainda abertos, sem filtro de período) - status "Em andamento" dentro do
+  // período filtrado é outra coisa (pedidos daquele mês que estavam andamento naquele mês).
+  const abertosHojeList = DADOS.condicionais.abertosHoje || [];
+  const qAndHoje = abertosHojeList.length;
+  const vAndHoje = sum(abertosHojeList, 'valor');
+  const pecasAndHoje = sum(abertosHojeList, 'qtdPecas');
   const taxaPecas = (pecasFin+pecasRep) ? pct(pecasFin,pecasFin+pecasRep) : '—';
 
   const nf = periodArr(DADOS.vendas.naoFiscalMensal);
@@ -670,7 +680,7 @@ function renderVendas(){
       <div class="kpi"><div class="label">Total de condicionais</div><div class="value">${num(qTotal)}</div><div class="sub">pedidos no período</div></div>
       <div class="kpi"><div class="label">Finalizados (virou venda)</div><div class="value">${num(qFin)}</div><div class="sub">${brl2(vFin)}</div></div>
       <div class="kpi warn"><div class="label">Devolvidos</div><div class="value">${num(qRep)}</div></div>
-      <div class="kpi ${qAnd>0?'warn':''}"><div class="label">Em andamento (hoje)</div><div class="value">${num(qAnd)}</div><div class="sub">${vAnd?brl2(vAnd):'—'}</div>${qAnd>0?'<button class="kpi-detail-btn" onclick="openDetalhesCondicionais()">Detalhes</button>':''}</div>
+      <div class="kpi ${qAndHoje>0?'warn':''}"><div class="label">Em andamento (hoje)</div><div class="value">${num(qAndHoje)}</div><div class="sub">${vAndHoje?brl2(vAndHoje):'—'}</div>${qAndHoje>0?'<button class="kpi-detail-btn" onclick="openDetalhesCondicionais()">Detalhes</button>':''}</div>
       <div class="kpi ${taxa!=='—' && parseInt(taxa)<50 ? 'bad':''}"><div class="label">Taxa de conversão (por qtd. de pedidos)</div><div class="value">${taxa}</div><div class="sub">finalizados ÷ (finalizados + devolvidos)</div></div>
     </div>
     <div class="desc">Mesma análise, contando <b>peças (itens)</b> em vez de pedidos — um pedido pode ter mais de uma peça</div>
@@ -678,7 +688,7 @@ function renderVendas(){
       <div class="kpi"><div class="label">Total de peças em condicional</div><div class="value">${num(pecasTotal)}</div><div class="sub">peças no período</div></div>
       <div class="kpi"><div class="label">Peças finalizadas (virou venda)</div><div class="value">${num(pecasFin)}</div></div>
       <div class="kpi warn"><div class="label">Peças devolvidas</div><div class="value">${num(pecasRep)}</div></div>
-      <div class="kpi ${pecasAnd>0?'warn':''}"><div class="label">Peças em andamento (hoje)</div><div class="value">${num(pecasAnd)}</div>${pecasAnd>0?'<button class="kpi-detail-btn" onclick="openDetalhesCondicionais()">Detalhes</button>':''}</div>
+      <div class="kpi ${pecasAndHoje>0?'warn':''}"><div class="label">Peças em andamento (hoje)</div><div class="value">${num(pecasAndHoje)}</div>${pecasAndHoje>0?'<button class="kpi-detail-btn" onclick="openDetalhesCondicionais()">Detalhes</button>':''}</div>
       <div class="kpi ${taxaPecas!=='—' && parseInt(taxaPecas)<50 ? 'bad':''}"><div class="label">Taxa de conversão (por peças)</div><div class="value">${taxaPecas}</div><div class="sub">peças finalizadas ÷ (finalizadas + devolvidas)</div></div>
     </div>
     <div class="callout muted">${DADOS.condicionais.nota} ${num(DADOS.condicionais.pedidosSemItem)} pedidos do histórico completo não têm item de venda vinculado (não entram na contagem de peças).</div>
@@ -751,6 +761,7 @@ function renderContas(){
   const contas = [...DADOS.contas.saldoPorConta].sort((a,b)=>b.saldo-a.saldo);
   const saldoTotal = sum(contas,'saldo');
   const caixaGeral = contas.find(c=>c.conta==='Caixa Geral');
+  const caixaGeralSaldo = caixaGeral ? caixaGeral.saldo : 0;
 
   // saldo acumulado mes a mes (caixa geral e total)
   let accCaixa = 0, accTotal = 0;
@@ -763,17 +774,17 @@ function renderContas(){
   });
 
   return `
-  <div class="callout muted">Esta aba não muda com o filtro de período — o saldo é a foto de hoje de cada conta (igual ao estoque), não um fluxo de um período específico. Entradas/saídas mostradas na tabela somam o histórico completo desde jan/2025.</div>
+  <div class="callout muted">Esta aba não muda com o filtro de período — o saldo é a foto de hoje de cada conta (igual ao estoque), não um fluxo de um período específico. Entradas/saídas mostradas na tabela somam todo o histórico disponível no sistema (não só o período carregado no painel).</div>
   ${DADOS.contas.acertoCaixaAchado.texto ? `<div class="callout red"><b>Achado urgente — Acerto de Caixa detectado:</b> ${DADOS.contas.acertoCaixaAchado.texto}</div>` : ''}
   <div class="callout blue">${DADOS.contas.nota}</div>
   <div class="kpis">
     <div class="kpi"><div class="label">Saldo total (todas as contas)</div><div class="value">${brl(saldoTotal)}</div></div>
-    <div class="kpi"><div class="label">Caixa Geral</div><div class="value">${brl(caixaGeral.saldo)}</div><div class="sub">${pct(caixaGeral.saldo,saldoTotal)} do total</div></div>
+    <div class="kpi"><div class="label">Caixa Geral</div><div class="value">${caixaGeral?brl(caixaGeralSaldo):'—'}</div><div class="sub">${caixaGeral?pct(caixaGeralSaldo,saldoTotal)+' do total':'conta "Caixa Geral" não encontrada nesta base'}</div></div>
   </div>
 
   <section class="panel">
     <h2>Evolução do saldo acumulado — Caixa Geral vs. todas as contas</h2>
-    <div class="desc">Saldo acumulado mês a mês desde jan/2025 (entradas − saídas registradas no sistema)</div>
+    <div class="desc">Saldo acumulado mês a mês desde ${monthLabel(MESES[0].ano,MESES[0].mes)} (entradas − saídas registradas no sistema)</div>
     <div class="barchart">${stackedBarChartHTML(evolucao, m=>monthLabel(m.ano,m.mes), [
       {label:'Caixa Geral', color:'#2c3e6b', valueFn:m=>Math.max(0,m.caixa)},
       {label:'Demais contas', color:'#cbd0db', valueFn:m=>Math.max(0,m.total-m.caixa)}
@@ -795,7 +806,7 @@ function renderContas(){
 }
 
 function classificaPagar(pc){
-  return pc.map(r => ({...r, tipo: DADOS.pagar.classificacao[r.categoria] || 'Fixa'}));
+  return pc.map(r => ({...r, tipo: DADOS.pagar.classificacao[r.categoria] || 'SemClassificacao'}));
 }
 
 function renderEquilibrio(){
@@ -835,11 +846,12 @@ function renderEquilibrio(){
   const czVlr = sum(cz,'vlrSemCusto'), czVenda = sum(cz,'vlrTotalVenda'), czQtd = sum(cz,'qtdSemCusto'), czQtdTotal = sum(cz,'qtdTotal');
   const czPct = czVenda ? (czVlr/czVenda*100) : 0;
 
-  const tipoLabel = {CMV:'CMV (custo da mercadoria)', Variavel:'Despesa variável', Fixa:'Despesa fixa', NaoOperacional:'Não operacional (fora do cálculo)'};
-  const tipoCor = {CMV:'#c62828', Variavel:'#e08e0b', Fixa:'#2c3e6b', NaoOperacional:'#888'};
-  const porTipo = ['CMV','Variavel','Fixa','NaoOperacional'].map(t=>({tipo:t, valor: sum(pc.filter(r=>r.tipo===t),'valor')}));
+  const tipoLabel = {CMV:'CMV (custo da mercadoria)', Variavel:'Despesa variável', Fixa:'Despesa fixa', NaoOperacional:'Não operacional (fora do cálculo)', SemClassificacao:'Sem classificação (revisar — fora do cálculo)'};
+  const tipoCor = {CMV:'#c62828', Variavel:'#e08e0b', Fixa:'#2c3e6b', NaoOperacional:'#888', SemClassificacao:'#9333ea'};
+  const porTipo = ['CMV','Variavel','Fixa','NaoOperacional','SemClassificacao'].map(t=>({tipo:t, valor: sum(pc.filter(r=>r.tipo===t),'valor')}));
+  const semClass = sum(pc.filter(r=>r.tipo==='SemClassificacao'),'valor');
   const porCategoria = groupSum(pc,'categoria','valor').map(x=>{
-    const tipo = DADOS.pagar.classificacao[x.key] || 'Fixa';
+    const tipo = DADOS.pagar.classificacao[x.key] || 'SemClassificacao';
     return {categoria:x.key, tipo, valor:x.value};
   }).sort((a,b)=> (a.tipo>b.tipo?1:-1) || b.valor-a.valor);
 
@@ -898,6 +910,7 @@ function renderEquilibrio(){
     </section>
   </div>
   <div class="note">Não operacional (${brl2(naoOper)} no período) fica de fora do cálculo do ponto de equilíbrio — são itens como aplicações financeiras, antecipação de lucros e compras de imobilizado, que não são despesa operacional recorrente.</div>
+  ${semClass>0 ? `<div class="note" style="color:${tipoCor.SemClassificacao}">Sem classificação (${brl2(semClass)} no período) também fica de fora do cálculo do ponto de equilíbrio — são categorias do plano de contas que ainda não foram mapeadas nessa classificação de consultoria (não é tratado como despesa fixa por padrão, pra não inflar o PE). Ver "Detalhe por categoria" abaixo pra saber quais categorias são essas.</div>` : ''}
   `;
 }
 
@@ -961,7 +974,7 @@ function ctaReceberPagarBlock(domKey, titulo, mensalArr, legado, agingArr, chart
   </section>
 
   ${agingHTML}
-  <div class="callout muted">Histórico anterior a jan/2025 (fora do período selecionável): ${num(legado.qtd)} títulos, ${brl(legado.emit)} emitidos, ${brl(legado.aberto)} ainda em aberto/vencido.</div>
+  <div class="callout muted">Histórico anterior a ${monthLabel(MESES[0].ano,MESES[0].mes)} (fora do período selecionável): ${num(legado.qtd)} títulos, ${brl(legado.emit)} emitidos, ${brl(legado.aberto)} ainda em aberto/vencido.</div>
   `;
 }
 
@@ -995,9 +1008,9 @@ function renderReceber(){
         <div class="kpi ${inadPct>15?'bad':inadPct>5?'warn':'good'}"><div class="label">Inadimplência no período</div><div class="value">${inadPct.toFixed(1)}%</div><div class="sub">${brl2(inadNaoRec)} ainda não recebido de ${brl2(inadDevido)} que venceram no período (todas as formas)</div></div>
         <div class="kpi"><div class="label">PMR — Prazo Médio de Recebimento</div><div class="value">${pmr.toFixed(0)} dias</div><div class="sub">Só vendas com forma de pagamento <b>Prazo</b> — média ponderada por valor, entre data de emissão e data de baixa, dos títulos recebidos no período</div></div>
       </div>
-      <div class="desc">% do que venceu em cada mês e ainda não foi recebido até hoje (29/06/2026) — quanto mais perto do mês atual, maior a tendência de viés (título recente pode só ainda não ter dado tempo de ser pago)</div>
+      <div class="desc">% do que venceu em cada mês e ainda não foi recebido até hoje (${new Date().toLocaleDateString('pt-BR')}) — quanto mais perto do mês atual, maior a tendência de viés (título recente pode só ainda não ter dado tempo de ser pago)</div>
       <div class="barchart">${pctBarChartHTML(inadM, m=>monthLabel(m.ano,m.mes), m=>m.pctInad, m=>m.pctInad>15?'#c62828':m.pctInad>5?'#e08e0b':'#2e7d32')}</div>
-      <div class="note">PMR calculado só com títulos <b>vendidos a Prazo</b> e <b>emitidos a partir de jan/2025</b> — em jan/2026 houve uma baixa em lote de dívida legada bem antiga (alguns títulos de até 2012) que, se incluída, distorceria a média para mais de 400 dias. Restringir a Prazo (em vez de todas as formas) sobe o PMR de ~54 para ~82 dias no período padrão — cartão/PIX/dinheiro quitam em poucos dias e escondiam o prazo real do crédito que a loja dá ao cliente.</div>
+      <div class="note">PMR calculado só com títulos <b>vendidos a Prazo</b> e <b>emitidos a partir de ${monthLabel(MESES[0].ano,MESES[0].mes)}</b> (início do período carregado) — em bases com baixa em lote de dívida legada muito antiga, incluir títulos anteriores a isso pode distorcer bastante a média. Restringir a Prazo (em vez de todas as formas) tende a subir o PMR — cartão/PIX/dinheiro quitam em poucos dias e escondiam o prazo real do crédito que a loja dá ao cliente.</div>
     </section>
     <section class="panel">
       <h2>Previsto x Recebido (Prazo/Cheque)</h2>
@@ -1090,7 +1103,7 @@ function renderPagar(){
   </div>` +
     ctaReceberPagarBlock('pagar', 'Contas a Pagar', DADOS.pagar.mensal, DADOS.pagar.legado, null) +
     `<div class="kpis" style="margin-bottom:10px">
-      <div class="kpi"><div class="label">PMP — Prazo Médio de Pagamento</div><div class="value">${pmp.toFixed(0)} dias</div><div class="sub">Média ponderada por valor, entre data de emissão e data de baixa, dos títulos pagos no período (só emitidos a partir de jan/2025)</div></div>
+      <div class="kpi"><div class="label">PMP — Prazo Médio de Pagamento</div><div class="value">${pmp.toFixed(0)} dias</div><div class="sub">Média ponderada por valor, entre data de emissão e data de baixa, dos títulos pagos no período</div></div>
     </div>
     <section class="panel">
       <h2>Por plano de contas (categoria de despesa)</h2>

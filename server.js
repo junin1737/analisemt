@@ -250,12 +250,18 @@ async function buildDados(s, e, months) {
       GROUP BY 1,2,3 ORDER BY 1,2,5 DESC`, 'vendR', cache, hotStartYM, isIncremental);
     console.log('vendas mensal+vendedoras OK');
 
+    // NF mista (item normal + item CFOP 5929): não descarta a NF inteira do detalhe de forma
+    // de pagamento - só exclui quando TODOS os itens são 5929 (documento sem nenhuma venda
+    // real). Alinha com mensalR/cancR/movMR etc., que já excluem só o item 5929, não a NF.
+    // Pagamento não tem granularidade de item, então não dá pra excluir só "a parte 5929" do
+    // valor pago - mas manter a NF (com todo o pagamento) quando ela tem pelo menos um item
+    // válido é mais próximo do faturamento do que zerar a NF inteira.
     const pagR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       F.DESCRICAO FORMA, SUM(P.VLR_PAGTO) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
       WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR') AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
-        AND NOT EXISTS (SELECT 1 FROM TB_NFV_ITEM XI WHERE XI.ID_NFVENDA=N.ID_NFVENDA AND XI.CFOP='5929')
+        AND EXISTS (SELECT 1 FROM TB_NFV_ITEM XI WHERE XI.ID_NFVENDA=N.ID_NFVENDA AND XI.CFOP<>'5929')
       GROUP BY 1,2,3 ORDER BY 1,2,4 DESC`, 'pagR', cache, hotStartYM, isIncremental);
     console.log('pagamento OK');
 
@@ -265,7 +271,7 @@ async function buildDados(s, e, months) {
       FROM TB_NFVENDA N JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
       WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR')
-        AND NOT EXISTS (SELECT 1 FROM TB_NFV_ITEM XI WHERE XI.ID_NFVENDA=N.ID_NFVENDA AND XI.CFOP='5929')
+        AND EXISTS (SELECT 1 FROM TB_NFV_ITEM XI WHERE XI.ID_NFVENDA=N.ID_NFVENDA AND XI.CFOP<>'5929')
       GROUP BY F.DESCRICAO ORDER BY SUM(P.VLR_PAGTO) DESC`);
 
     const cltR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
@@ -287,7 +293,7 @@ async function buildDados(s, e, months) {
     const nfR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       COUNT(DISTINCT N.ID_NFVENDA) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='E' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      WHERE N.STATUS='E' AND N.NF_MODELO='GR' AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
       GROUP BY 1,2 ORDER BY 1,2`, 'nfR', cache, hotStartYM, isIncremental);
 
     const cancR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
@@ -299,7 +305,7 @@ async function buildDados(s, e, months) {
     const cancGR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       COUNT(DISTINCT N.ID_NFVENDA) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='C' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      WHERE N.STATUS='C' AND N.NF_MODELO='GR' AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
       GROUP BY 1,2 ORDER BY 1,2`, 'cancGR', cache, hotStartYM, isIncremental);
     console.log('cancelamentos OK');
 
@@ -382,7 +388,7 @@ async function buildDados(s, e, months) {
     const movGR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       SUM(I.QTD_ITEM) QTD, SUM(I.VLR_CUSTO) CUSTO
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='E' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      WHERE N.STATUS='E' AND N.NF_MODELO='GR' AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
       GROUP BY 1,2 ORDER BY 1,2`, 'movGR', cache, hotStartYM, isIncremental);
     const czR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       SUM(CASE WHEN COALESCE(I.VLR_CUSTO,0)=0 THEN I.QTD_ITEM ELSE 0 END) QTD_SEM_CUSTO,
@@ -426,6 +432,12 @@ async function buildDados(s, e, months) {
         WHEN CURRENT_DATE-DT_VENCTO<=365 THEN '5' ELSE '6' END`);
     console.log('aging OK');
 
+    // NOTA (todas as queries desta seção que filtram por forma de pagamento): usar EXISTS
+    // em vez de JOIN direto com TB_NFVENDA_FMAPAGTO_NFCE/TB_FORMA_PAGTO_NFCE - a NF pode ter
+    // 2+ linhas de pagamento com a mesma forma (ex: pago em 3 cheques separados) ou títulos
+    // múltiplos em V_CONTAS_RECEBER (parcelamento); joinar direto multiplica cada título por
+    // linha de pagamento que casa (fan-out), inflando SUM(VLR_CTAREC)/SUM(VLR_RECEBIDO). EXISTS
+    // só filtra "essa NF tem pelo menos uma forma qualificada", sem duplicar linha de R.
     const mpcR = await q(db, `SELECT
       CASE WHEN R.DT_EMISSAO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM R.DT_EMISSAO) END ANO,
       CASE WHEN R.DT_EMISSAO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM R.DT_EMISSAO) END MES,
@@ -435,9 +447,11 @@ async function buildDados(s, e, months) {
       SUM(CASE WHEN R.DT_BAIXA IS NOT NULL THEN R.VLR_RECEBIDO ELSE 0 END) RECEBIDO
       FROM V_CONTAS_RECEBER R
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
-      JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
-      JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND F.DESCRICAO IN ('Prazo','Cheque')
+      WHERE N.STATUS='E' AND EXISTS (
+        SELECT 1 FROM TB_NFVENDA_FMAPAGTO_NFCE P
+        JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
+        WHERE P.ID_NFVENDA=N.ID_NFVENDA AND F.DESCRICAO IN ('Prazo','Cheque')
+      )
       GROUP BY
         CASE WHEN R.DT_EMISSAO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM R.DT_EMISSAO) END,
         CASE WHEN R.DT_EMISSAO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM R.DT_EMISSAO) END`);
@@ -450,9 +464,11 @@ async function buildDados(s, e, months) {
       SUM(CASE WHEN R.DT_BAIXA IS NULL THEN R.VLR_CTAREC ELSE 0 END) NAO_RECEBIDO
       FROM V_CONTAS_RECEBER R
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
-      JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
-      JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND F.DESCRICAO IN ('Prazo','Cheque')
+      WHERE N.STATUS='E' AND EXISTS (
+        SELECT 1 FROM TB_NFVENDA_FMAPAGTO_NFCE P
+        JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
+        WHERE P.ID_NFVENDA=N.ID_NFVENDA AND F.DESCRICAO IN ('Prazo','Cheque')
+      )
       GROUP BY
         CASE WHEN R.DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM R.DT_VENCTO) END,
         CASE WHEN R.DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM R.DT_VENCTO) END`);
@@ -460,18 +476,28 @@ async function buildDados(s, e, months) {
     const rvpbR = await qHot(db, `SELECT EXTRACT(YEAR FROM R.DT_BAIXA) ANO, EXTRACT(MONTH FROM R.DT_BAIXA) MES, SUM(R.VLR_RECEBIDO) REC
       FROM V_CONTAS_RECEBER R
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
-      JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
-      JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND F.DESCRICAO IN ('Prazo','Cheque') AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}'
+      WHERE N.STATUS='E' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}' AND EXISTS (
+        SELECT 1 FROM TB_NFVENDA_FMAPAGTO_NFCE P
+        JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
+        WHERE P.ID_NFVENDA=N.ID_NFVENDA AND F.DESCRICAO IN ('Prazo','Cheque')
+      )
       GROUP BY 1,2`, 'rvpbR', cache, hotStartYM, isIncremental);
     console.log('vencimento prazo OK');
 
-    const rpfR = await q(db, `SELECT F.DESCRICAO FORMA, SUM(R.VLR_CTAREC) VALOR
-      FROM V_CONTAS_RECEBER R
-      JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
-      JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
-      JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' GROUP BY F.DESCRICAO ORDER BY SUM(R.VLR_CTAREC) DESC`);
+    // Aqui precisamos manter o agrupamento por forma (não dá pra usar EXISTS como nas
+    // outras queries desta seção), então a query interna usa DISTINCT em (forma, título)
+    // pra garantir que cada título só entra uma vez por forma, mesmo se a NF tiver 2+
+    // linhas de pagamento da mesma forma (ex: pago em vários cheques) - sem isso, SUM(R.VLR_CTAREC)
+    // multiplicava pela quantidade de linhas de pagamento que casavam.
+    const rpfR = await q(db, `SELECT FORMA, SUM(VLR_CTAREC) VALOR FROM (
+        SELECT DISTINCT F.DESCRICAO FORMA, R.ID_CTAREC, R.VLR_CTAREC
+        FROM V_CONTAS_RECEBER R
+        JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
+        JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
+        JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
+        WHERE N.STATUS='E'
+      ) D
+      GROUP BY FORMA ORDER BY SUM(VLR_CTAREC) DESC`);
     console.log('por forma OK');
 
     // Origem do contas a receber (histórico completo): quanto vem de venda fiscal (65 ou 55),
@@ -507,19 +533,23 @@ async function buildDados(s, e, months) {
       SUM(CASE WHEN R.DT_BAIXA>R.DT_VENCTO THEN R.VLR_RECEBIDO ELSE 0 END) ATRASO, SUM(R.VLR_RECEBIDO) TOTAL
       FROM V_CONTAS_RECEBER R
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
-      JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
-      JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND F.DESCRICAO='Prazo' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}'
+      WHERE N.STATUS='E' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}' AND EXISTS (
+        SELECT 1 FROM TB_NFVENDA_FMAPAGTO_NFCE P
+        JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
+        WHERE P.ID_NFVENDA=N.ID_NFVENDA AND F.DESCRICAO='Prazo'
+      )
       GROUP BY 1,2 ORDER BY 1,2`, 'rbpR', cache, hotStartYM, isIncremental);
 
     const pmrR = await qHot(db, `SELECT EXTRACT(YEAR FROM R.DT_BAIXA) ANO, EXTRACT(MONTH FROM R.DT_BAIXA) MES,
       SUM(R.VLR_RECEBIDO) TOTAL, SUM((R.DT_BAIXA-R.DT_EMISSAO)*R.VLR_RECEBIDO) SOMA_DIAS
       FROM V_CONTAS_RECEBER R
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
-      JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
-      JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND F.DESCRICAO='Prazo' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}'
-        AND R.DT_EMISSAO>=DATE '${s}' AND R.DT_EMISSAO IS NOT NULL
+      WHERE N.STATUS='E' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}'
+        AND R.DT_EMISSAO>=DATE '${s}' AND R.DT_EMISSAO IS NOT NULL AND EXISTS (
+        SELECT 1 FROM TB_NFVENDA_FMAPAGTO_NFCE P
+        JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
+        WHERE P.ID_NFVENDA=N.ID_NFVENDA AND F.DESCRICAO='Prazo'
+      )
       GROUP BY 1,2 ORDER BY 1,2`, 'pmrR', cache, hotStartYM, isIncremental);
     console.log('receber PMR OK');
 
@@ -669,8 +699,8 @@ async function buildDados(s, e, months) {
       vendedorasMensal: vendR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), nome:String(r.NOME||''), qtd:ri(r.QTD), total:r2(r.TOTAL) })),
       produtosMensal: prodOrder.map(k => mergedProd[k]),
       pagamentoMensal: pagR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), forma:normForma(String(r.FORMA||'')), total:r2(r.TOTAL) })),
-      pagamentoNota: 'Inclui vendas fiscais (NFC-e modelo 65) e gerenciais (modelo GR) juntas.',
-      naoFiscalNota: 'Vendas exclusivamente gerenciais (sem NFC-e) não entram no detalhe de forma de pagamento acima — são registros internos sem dado de forma de pagamento.',
+      pagamentoNota: 'Inclui vendas fiscais (NFC-e modelo 65, NF-e modelo 55) e gerenciais (modelo GR) juntas.',
+      naoFiscalNota: 'O detalhe por forma de pagamento acima já inclui as vendas só-gerenciais (GR), não só as fiscais — o que fica de fora são as (raras) vendas sem nenhuma forma de pagamento registrada no sistema.',
       fiscalizacaoPorForma: fiscR.map(r => ({ forma:normForma(String(r.FORMA||'')), fiscal:r2(r.FISCAL), gerencial:r2(r.GERENCIAL) })),
       clienteTipoMensal: cltR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), tipo:String(r.TIPO||'').trim(), total:r2(r.TOTAL) })),
       naoFiscalMensal,
@@ -784,7 +814,7 @@ async function buildDados(s, e, months) {
     }
     const inativasNomes=inativosR.map(r=>r.CONTA).join(', ');
     const contas = {
-      nota: `Saldo de cada conta é o "Saldo Real" mantido pelo próprio CLIPP (Controle Bancário) — exceto Caixa Geral, calculado como entradas menos saídas no sistema desde jan/2025 (pode não bater com o extrato real, saldo anterior ao histórico não incluído).${inativasNomes?' Contas inativas ocultadas: '+inativasNomes+'.':''} "AJUSTES" incluída propositalmente — alto volume indica lançamentos genéricos.`,
+      nota: `Saldo de cada conta é o "Saldo Real" mantido pelo próprio CLIPP (Controle Bancário) — exceto Caixa Geral, calculado como entradas menos saídas de todo o histórico disponível no sistema (pode não bater com o extrato real se houver saldo de abertura anterior ao início dos registros).${inativasNomes?' Contas inativas ocultadas: '+inativasNomes+'.':''} "AJUSTES" incluída propositalmente — alto volume indica lançamentos genéricos.`,
       saldoPorConta,
       contasInativasOcultas: inativosR.map(r=>({conta:String(r.CONTA||''),saldo:r2(r.SALDO)})),
       caixaGeralMensal: sortedMK.map(m=>({ano:m.ano,mes:m.mes,saldoMes:cgBK[`${m.ano}-${m.mes}`]?r2(cgBK[`${m.ano}-${m.mes}`].SALDO_MES):0})),
