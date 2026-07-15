@@ -1324,7 +1324,7 @@ async function fetchAndInit(dbPath, host, port, user, password, fbVersion, autoC
     const usrData = await usrRes.json();
     overlay.style.display = 'none';
     document.getElementById('dbModal').style.display = 'none';
-    showLoginModal(usrData.ok ? usrData.usuarios : [], connData.nfCount||0);
+    showLoginModal(usrData.ok ? usrData.usuarios : [], connData.nfCount||0, { temCache: !!connData.temCache, hotMeses: connData.hotMeses||6 });
   } catch(e) {
     overlay.style.display = 'none';
     document.getElementById('connectError').textContent = e.message;
@@ -1341,8 +1341,12 @@ function atualizarCurrentUserLabel() {
 // skipDadosReload=true é usado na troca de usuário (logoff): os dados já estão
 // carregados no navegador e não dependem de quem está logado (só a permissão de
 // quais abas aparecem muda) — não faz sentido bater no banco de novo.
+// temCache=true indica que essa base já tem cache local — a carga vai ser incremental
+// (só a janela quente é relida do banco), não uma carga completa de novo.
 function showLoginModal(usuarios, nfCount, opts) {
   const skipDadosReload = !!(opts && opts.skipDadosReload);
+  const temCache = !!(opts && opts.temCache);
+  const hotMeses = (opts && opts.hotMeses) || 6;
   const sel = document.getElementById('loginUsuario');
   sel.innerHTML = usuarios.map(u => `<option value="${u.id}">${u.nome}</option>`).join('');
   document.getElementById('loginSenha').value = '';
@@ -1370,7 +1374,9 @@ function showLoginModal(usuarios, nfCount, opts) {
     const overlay = document.getElementById('loadingOverlay');
     const loadMsg = document.getElementById('loadingMsg');
     overlay.style.display = 'flex';
-    loadMsg.textContent = 'Carregando dados (' + nfCount.toLocaleString('pt-BR') + ' NFs)...';
+    loadMsg.textContent = temCache
+      ? 'Atualizando dados recentes (últimos ' + hotMeses + ' meses)...'
+      : 'Carregando dados (' + nfCount.toLocaleString('pt-BR') + ' NFs)...';
     try {
       const dadosRes = await fetch('/api/dados');
       const dadosData = await dadosRes.json();

@@ -969,7 +969,10 @@ app.post('/api/connect', (req, res) => {
           dbConfig.cnpj = null;
         }
         gravarBaseAtualIni(dbConfig, 'connect');
-        res.json({ ok:true, nfCount, fbVersion: fbVersion||'2.5', emitente });
+        // Já avisa o cliente se essa base tem cache local (carga vai ser incremental/rápida)
+        // ou não (primeira vez, carga completa) - usado só pra mensagem de carregamento.
+        const temCache = !!(dbConfig.cnpj && loadCache(dbConfig.cnpj));
+        res.json({ ok:true, nfCount, fbVersion: fbVersion||'2.5', emitente, temCache, hotMeses: HOT_MESES });
       });
     });
   });
