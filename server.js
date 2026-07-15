@@ -160,9 +160,12 @@ function q(db, sql) {
 
 function getDateRange() {
   const now = new Date();
-  const endYear  = now.getFullYear();
-  const endMonth = now.getMonth() + 1;           // 1-12
-  const endDate  = `${endYear}-${String(endMonth).padStart(2,'0')}-01`;
+  // endDate é limite EXCLUSIVO (usado como "DT_EMISSAO < endDate" nas queries) - primeiro dia
+  // do mês SEGUINTE ao atual, pra incluir o mês corrente inteiro (ainda em andamento) na janela.
+  // O cliente mostra um alerta quando o período selecionado inclui o mês corrente, avisando que
+  // o dado é parcial (só até hoje) - ver mesCorrenteInfo() em index.html.
+  const ed = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const endDate  = `${ed.getFullYear()}-${String(ed.getMonth()+1).padStart(2,'0')}-01`;
   const sd = new Date(now.getFullYear(), now.getMonth() - 18, 1);
   const startDate = `${sd.getFullYear()}-${String(sd.getMonth()+1).padStart(2,'0')}-01`;
   return { startDate, endDate };

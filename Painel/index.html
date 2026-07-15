@@ -180,6 +180,7 @@
   </div>
   <div class="rangeLabel" id="rangeLabel"></div>
 </div>
+<div id="mesCorrenteAlerta" class="callout yellow" style="display:none;margin:0 20px 12px;"></div>
 
 <div class="tabs" id="tabs"></div>
 
@@ -406,9 +407,26 @@ function buildTabs(){
 }
 
 /* ===================== RENDER ===================== */
+// Se o mês corrente (ainda em andamento) estiver dentro do período selecionado, devolve
+// info pra avisar que o dado desse mês é parcial (só até hoje, não comparável a mês fechado).
+function mesCorrenteInfo(){
+  const hoje = new Date();
+  const idx = MESES_IDX.get(`${hoje.getFullYear()}-${hoje.getMonth()+1}`);
+  if (idx === undefined || idx < state.de || idx > state.ate) return null;
+  return { label: monthLabel(hoje.getFullYear(), hoje.getMonth()+1), hoje: hoje.toLocaleDateString('pt-BR') };
+}
+
 function renderAll(){
   document.getElementById('rangeLabel').textContent = filtroLabel();
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===state.tab));
+  const alertaEl = document.getElementById('mesCorrenteAlerta');
+  const mc = mesCorrenteInfo();
+  if (mc) {
+    alertaEl.style.display = 'block';
+    alertaEl.textContent = `⚠ O período selecionado inclui ${mc.label}, mês ainda em andamento — os valores desse mês são parciais (só até ${mc.hoje}), não comparáveis a um mês fechado.`;
+  } else {
+    alertaEl.style.display = 'none';
+  }
   const fns = { resumo:renderResumo, vendas:renderVendas, estoque:renderEstoque, receber:renderReceber, pagar:renderPagar, equilibrio:renderEquilibrio, contas:renderContas, configuracoes:renderConfiguracoes };
   document.getElementById('tabContent').innerHTML = fns[state.tab] ? fns[state.tab]() : '';
   if (state.tab === 'configuracoes') loadConfiguracoes();
