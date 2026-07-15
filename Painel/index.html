@@ -1088,7 +1088,7 @@ function categoriaDetalheHTML(){
   if (!cat) return '';
   const { outrosCats } = planoContasGrouped();
   const categorias = cat === 'Outros' ? outrosCats : [cat];
-  const rows = periodArr(DADOS.pagar.detalhe.filter(d=>categorias.includes(d.categoria))).sort((a,b)=>a.dt<b.dt?-1:1);
+  const rows = periodArr(DADOS.pagar.detalhe.filter(d=>categorias.includes(d.categoria))).sort((a,b)=>a.venc<b.venc?-1:1);
   const totalRows = sum(rows,'valor');
   return `
   <section class="panel">
@@ -1125,7 +1125,7 @@ function renderPagar(){
     </div>
     <section class="panel">
       <h2>Por plano de contas (categoria de despesa)</h2>
-      <div class="desc">Títulos com data de emissão dentro do período selecionado, agrupados pela categoria do plano de contas — top 9 + "Outros". Clique numa categoria para ver as operações.</div>
+      <div class="desc">Títulos com vencimento dentro do período selecionado, agrupados pela categoria do plano de contas — top 9 + "Outros". Clique numa categoria para ver as operações.</div>
       ${planoContasHTML()}
     </section>` +
     categoriaDetalheHTML();
