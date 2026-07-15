@@ -1343,6 +1343,8 @@ function showLoginModal(usuarios, nfCount) {
       const dadosRes = await fetch('/api/dados');
       const dadosData = await dadosRes.json();
       if (!dadosData.ok) throw new Error(dadosData.error);
+      const sync = dadosData.dados._sync;
+      if (sync) console.log(sync.incremental ? `Sincronização rápida (últimos ${sync.hotMeses} meses; resto do cache local)` : 'Carga completa (sem cache local ainda)');
       overlay.style.display = 'none';
       initApp(dadosData.dados);
     } catch(e2) {
@@ -1405,6 +1407,42 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!dbPath) { document.getElementById('connectError').textContent = 'Informe o caminho do banco.'; document.getElementById('connectError').style.display='block'; return; }
     document.getElementById('connectError').style.display = 'none';
     fetchAndInit(dbPath, host, parseInt(port)||3050, 'SYSDBA', 'masterkey', fbVer);
+  });
+
+  document.getElementById('toggleAvancado').addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const box = document.getElementById('avancadoBox');
+    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  });
+
+  document.getElementById('resyncBtn').addEventListener('click', async () => {
+    const senha = document.getElementById('resyncSenha').value;
+    const msg = document.getElementById('resyncMsg');
+    msg.style.display = 'block'; msg.style.background = '#f3f4f6'; msg.style.color = '#555';
+    msg.textContent = 'Verificando...';
+    try {
+      const r = await fetch('/api/resync-completo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supervisorSenha: senha }),
+      });
+      const d = await r.json();
+      if (!d.ok) {
+        msg.style.background = '#fdecea'; msg.style.color = '#c62828';
+        msg.textContent = d.error || 'Erro ao recarregar.';
+        return;
+      }
+      document.getElementById('resyncSenha').value = '';
+      msg.style.background = '#e8f5e9'; msg.style.color = '#2e7d32';
+      msg.textContent = 'Cache apagado — recarregando tudo do zero...';
+      const dbPath = document.getElementById('dbPath').value.trim();
+      const host   = document.getElementById('dbHost').value.trim();
+      const port   = document.getElementById('dbPort').value.trim();
+      const fbVer  = document.querySelector('input[name="fbVersion"]:checked')?.value || '2.5';
+      fetchAndInit(dbPath, host, parseInt(port)||3050, 'SYSDBA', 'masterkey', fbVer);
+    } catch(e) {
+      msg.style.background = '#fdecea'; msg.style.color = '#c62828';
+      msg.textContent = 'Sem conexão com o servidor local.';
+    }
   });
 
   // Verifica atualização em background (baixa e instala sozinho no Electron;
@@ -1508,6 +1546,24 @@ document.addEventListener('DOMContentLoaded', () => {
     <p style="margin:14px 0 0;font-size:.78rem;color:#888;text-align:center;">
       Credenciais: SYSDBA / masterkey · porta 3050
     </p>
+
+    <div style="margin-top:16px;border-top:1px solid #eee;padding-top:10px;">
+      <a href="#" id="toggleAvancado" style="font-size:.8rem;color:#888;text-decoration:none;">⚙ Avançado ▾</a>
+      <div id="avancadoBox" style="display:none;margin-top:10px;">
+        <p style="margin:0 0 8px;font-size:.78rem;color:#888;">
+          Os dados dessa base ficam num cache local pra reconectar mais rápido (só os últimos meses são atualizados a cada conexão). Se desconfiar que algo antigo mudou e não apareceu, force uma releitura completa — precisa da senha do Supervisor.
+        </p>
+        <div style="display:flex;gap:8px;">
+          <input id="resyncSenha" type="password" placeholder="Senha do Supervisor" autocomplete="off"
+            style="flex:1;padding:8px 10px;border:1px solid #ccd;border-radius:6px;font-size:.85rem;" />
+          <button id="resyncBtn"
+            style="padding:8px 14px;background:#c62828;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:.82rem;white-space:nowrap;">
+            🗑 Recarregar tudo
+          </button>
+        </div>
+        <div id="resyncMsg" style="display:none;font-size:.8rem;margin-top:8px;padding:6px 10px;border-radius:6px;"></div>
+      </div>
+    </div>
   </div>
 </div>
 

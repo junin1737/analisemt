@@ -29,11 +29,68 @@ function gravarBaseAtualIni(cfg, evento) {
     `port=${cfg.port}`,
     `database=${cfg.database}`,
     `user=${cfg.user}`,
+    `cnpj=${cfg.cnpj || ''}`,
     `pid=${process.pid}`,
     '',
   ];
   try { fs.writeFileSync(iniPath, linhas.join('\r\n'), 'utf8'); }
   catch (e) { console.error('Erro ao gravar base_atual.ini:', e.message); }
+}
+
+// ─── Cache local de dados por cliente (chave: CNPJ) ─────────────────────────
+// Guarda os arrays de linhas brutos de algumas queries de buildDados() (as que têm
+// filtro de data "limpo", sem lógica de balde legado embutida) pra permitir reconectar
+// numa base já vista sem reler tudo do zero. Janela quente de HOT_MESES sempre fresca;
+// o resto vem do cache. "Recarregar tudo" (endpoint /api/resync-completo) apaga o cache.
+const HOT_MESES = 6;
+function getCacheDir() {
+  const dir = path.join(getConfigDir(), 'cache');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+function getCachePath(cnpj) { return path.join(getCacheDir(), `${cnpj}.json`); }
+function loadCache(cnpj) {
+  if (!cnpj) return null;
+  const p = getCachePath(cnpj);
+  if (!fs.existsSync(p)) return null;
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
+  catch (e) { console.error('Erro ao ler cache local:', e.message); return null; }
+}
+function saveCache(cnpj, cache) {
+  if (!cnpj) return;
+  try { fs.writeFileSync(getCachePath(cnpj), JSON.stringify(cache), 'utf8'); }
+  catch (e) { console.error('Erro ao gravar cache local:', e.message); }
+}
+function limparCache(cnpj) {
+  if (!cnpj) return false;
+  const p = getCachePath(cnpj);
+  if (!fs.existsSync(p)) return false;
+  fs.unlinkSync(p);
+  return true;
+}
+function hotWindow() {
+  const hoje = new Date();
+  const d = new Date(hoje.getFullYear(), hoje.getMonth() - HOT_MESES, 1);
+  const start = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`;
+  const startYM = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  return { hotStart: start, hotStartYM: startYM };
+}
+// Mescla linhas cacheadas (fora da janela quente) com linhas recém-lidas (dentro dela).
+// Só usar em queries cujo filtro de data é um limite inferior de verdade (sem balde
+// "legado" via CASE WHEN) - senão o balde legado da consulta "quente" fica errado.
+function mergeMensal(cachedRows, freshRows, hotStartYM) {
+  const cached = Array.isArray(cachedRows) ? cachedRows : [];
+  const fresh = Array.isArray(freshRows) ? freshRows : [];
+  const kept = cached.filter(r => {
+    const ym = `${String(ri(r.ANO)).padStart(4,'0')}-${String(ri(r.MES)).padStart(2,'0')}`;
+    return ym < hotStartYM;
+  });
+  return [...kept, ...fresh];
+}
+async function qHot(db, sql, cacheKey, cache, hotStartYM, isIncremental) {
+  const fresh = await q(db, sql);
+  if (!isIncremental) return fresh;
+  return mergeMensal(cache && cache.queries && cache.queries[cacheKey], fresh, hotStartYM);
 }
 
 // ─── Configuração local de usuários ─────────────────────────────────────────
@@ -170,31 +227,36 @@ function formaColor(f) { return FORMA_COLORS[f] || '#aaa'; }
 async function buildDados(s, e, months) {
   gravarBaseAtualIni(dbConfig, 'buildDados:start');
   const db = await attachDb();
-  console.log('DB attached, running queries sequentially...', JSON.stringify({host:dbConfig.host, port:dbConfig.port, database:dbConfig.database}));
+  const cnpj = dbConfig.cnpj || null;
+  const cache = cnpj ? loadCache(cnpj) : null;
+  const isIncremental = !!cache;
+  const { hotStart, hotStartYM } = hotWindow();
+  const sA = isIncremental ? hotStart : s; // janela quente se já tem cache; senão, carga completa
+  console.log('DB attached, running queries sequentially...', JSON.stringify({host:dbConfig.host, port:dbConfig.port, database:dbConfig.database, cnpj, modo: isIncremental ? `incremental desde ${hotStart}` : 'carga completa'}));
 
   try {
     // ── VENDAS ──────────────────────────────────────────────────────────────
-    const mensalR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+    const mensalR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       COUNT(DISTINCT N.ID_NFVENDA) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL, SUM(I.VLR_DESC) DESCONTO
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
-      GROUP BY 1,2 ORDER BY 1,2`);
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2 ORDER BY 1,2`, 'mensalR', cache, hotStartYM, isIncremental);
 
-    const vendR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+    const vendR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       F.NOME, COUNT(DISTINCT N.ID_NFVENDA) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_FUNCIONARIO F ON F.ID_FUNCIONARIO=N.ID_VENDEDOR
-      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
-      GROUP BY 1,2,3 ORDER BY 1,2,5 DESC`);
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2,3 ORDER BY 1,2,5 DESC`, 'vendR', cache, hotStartYM, isIncremental);
     console.log('vendas mensal+vendedoras OK');
 
-    const pagR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+    const pagR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       F.DESCRICAO FORMA, SUM(P.VLR_PAGTO) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR') AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR') AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
         AND NOT EXISTS (SELECT 1 FROM TB_NFV_ITEM XI WHERE XI.ID_NFVENDA=N.ID_NFVENDA AND XI.CFOP='5929')
-      GROUP BY 1,2,3 ORDER BY 1,2,4 DESC`);
+      GROUP BY 1,2,3 ORDER BY 1,2,4 DESC`, 'pagR', cache, hotStartYM, isIncremental);
     console.log('pagamento OK');
 
     const fiscR = await q(db, `SELECT F.DESCRICAO FORMA,
@@ -206,12 +268,12 @@ async function buildDados(s, e, months) {
         AND NOT EXISTS (SELECT 1 FROM TB_NFV_ITEM XI WHERE XI.ID_NFVENDA=N.ID_NFVENDA AND XI.CFOP='5929')
       GROUP BY F.DESCRICAO ORDER BY SUM(P.VLR_PAGTO) DESC`);
 
-    const cltR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+    const cltR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       CASE WHEN C.NOME IN ('CLIENTES DIVERSOS','A VISTA','CLIENTES SEM FICHA LANÇADA') THEN 'Genérico' ELSE 'Identificado' END TIPO,
       SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_CLIENTE C ON C.ID_CLIENTE=N.ID_CLIENTE
-      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
         AND NOT EXISTS (
           SELECT 1 FROM TB_NFVENDA_FMAPAGTO_NFCE P2
           JOIN TB_FORMA_PAGTO_NFCE F2 ON F2.ID_FMANFCE=P2.ID_FMANFCE
@@ -219,26 +281,26 @@ async function buildDados(s, e, months) {
         )
       GROUP BY EXTRACT(YEAR FROM N.DT_EMISSAO), EXTRACT(MONTH FROM N.DT_EMISSAO),
                CASE WHEN C.NOME IN ('CLIENTES DIVERSOS','A VISTA','CLIENTES SEM FICHA LANÇADA') THEN 'Genérico' ELSE 'Identificado' END
-      ORDER BY 1,2`);
+      ORDER BY 1,2`, 'cltR', cache, hotStartYM, isIncremental);
     console.log('fiscalização+clientes OK');
 
-    const nfR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+    const nfR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       COUNT(DISTINCT N.ID_NFVENDA) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='E' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
-      GROUP BY 1,2 ORDER BY 1,2`);
+      WHERE N.STATUS='E' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2 ORDER BY 1,2`, 'nfR', cache, hotStartYM, isIncremental);
 
-    const cancR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+    const cancR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       COUNT(DISTINCT N.ID_NFVENDA) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='C' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
-      GROUP BY 1,2 ORDER BY 1,2`);
+      WHERE N.STATUS='C' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2 ORDER BY 1,2`, 'cancR', cache, hotStartYM, isIncremental);
 
-    const cancGR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+    const cancGR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       COUNT(DISTINCT N.ID_NFVENDA) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='C' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
-      GROUP BY 1,2 ORDER BY 1,2`);
+      WHERE N.STATUS='C' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2 ORDER BY 1,2`, 'cancGR', cache, hotStartYM, isIncremental);
     console.log('cancelamentos OK');
 
     const top15R = await q(db, `SELECT EI.ID_ESTOQUE
@@ -262,23 +324,23 @@ async function buildDados(s, e, months) {
     console.log('produtos top15 OK');
 
     // ── CONDICIONAIS ────────────────────────────────────────────────────────
-    const condM = await q(db, `SELECT EXTRACT(YEAR FROM P.DT_PEDIDO) ANO, EXTRACT(MONTH FROM P.DT_PEDIDO) MES,
+    const condM = await qHot(db, `SELECT EXTRACT(YEAR FROM P.DT_PEDIDO) ANO, EXTRACT(MONTH FROM P.DT_PEDIDO) MES,
       CASE WHEN P.ID_STATUS=9 THEN 'Finalizado' WHEN P.ID_STATUS=2 THEN 'Reprovado' ELSE 'Em andamento' END STATUS,
       COUNT(DISTINCT P.ID_PEDIDO) QTD, SUM(COALESCE(T.VLR_TOTAL,0)) VALOR
       FROM TB_PEDIDO_VENDA P LEFT JOIN TB_PEDIDO_VENDA_TOT T ON T.ID_PEDIDO=P.ID_PEDIDO
-      WHERE P.ID_STATUS IN (1,2,7,9)
+      WHERE P.ID_STATUS IN (1,2,7,9) AND P.DT_PEDIDO>=DATE '${sA}'
       GROUP BY EXTRACT(YEAR FROM P.DT_PEDIDO), EXTRACT(MONTH FROM P.DT_PEDIDO),
                CASE WHEN P.ID_STATUS=9 THEN 'Finalizado' WHEN P.ID_STATUS=2 THEN 'Reprovado' ELSE 'Em andamento' END
-      ORDER BY 1,2,3`);
+      ORDER BY 1,2,3`, 'condM', cache, hotStartYM, isIncremental);
 
-    const condI = await q(db, `SELECT EXTRACT(YEAR FROM P.DT_PEDIDO) ANO, EXTRACT(MONTH FROM P.DT_PEDIDO) MES,
+    const condI = await qHot(db, `SELECT EXTRACT(YEAR FROM P.DT_PEDIDO) ANO, EXTRACT(MONTH FROM P.DT_PEDIDO) MES,
       CASE WHEN P.ID_STATUS=9 THEN 'Finalizado' WHEN P.ID_STATUS=2 THEN 'Reprovado' ELSE 'Em andamento' END STATUS,
       COUNT(DISTINCT P.ID_PEDIDO) QTD_PEDIDOS, SUM(I.QTD_ITEM) QTD_PECAS, SUM(I.VLR_TOTAL-I.VLR_DESC) VLR_ITENS
       FROM TB_PEDIDO_VENDA P JOIN TB_PED_VENDA_ITEM I ON I.ID_PEDIDO=P.ID_PEDIDO
-      WHERE P.ID_STATUS IN (1,2,7,9)
+      WHERE P.ID_STATUS IN (1,2,7,9) AND P.DT_PEDIDO>=DATE '${sA}'
       GROUP BY EXTRACT(YEAR FROM P.DT_PEDIDO), EXTRACT(MONTH FROM P.DT_PEDIDO),
                CASE WHEN P.ID_STATUS=9 THEN 'Finalizado' WHEN P.ID_STATUS=2 THEN 'Reprovado' ELSE 'Em andamento' END
-      ORDER BY 1,2,3`);
+      ORDER BY 1,2,3`, 'condI', cache, hotStartYM, isIncremental);
 
     const condA = await q(db, `SELECT P.ID_PEDIDO, P.DT_PEDIDO, C.NOME CLIENTE,
       SUM(I.QTD_ITEM) QTDPECAS, SUM(I.VLR_TOTAL-I.VLR_DESC) VALOR
@@ -312,23 +374,23 @@ async function buildDados(s, e, months) {
     const valsR = await q(db, `SELECT SUM(EP.QTD_ATUAL) PECAS, SUM(EP.QTD_ATUAL*E.PRC_CUSTO) CUSTO, SUM(EP.QTD_ATUAL*E.PRC_VENDA) VENDA
       FROM TB_EST_PRODUTO EP JOIN TB_EST_IDENTIFICADOR EI ON EI.ID_IDENTIFICADOR=EP.ID_IDENTIFICADOR
       JOIN TB_ESTOQUE E ON E.ID_ESTOQUE=EI.ID_ESTOQUE WHERE EP.QTD_ATUAL>0`);
-    const movMR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+    const movMR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       SUM(I.QTD_ITEM) QTD, SUM(I.VLR_CUSTO) CUSTO
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
-      GROUP BY 1,2 ORDER BY 1,2`);
-    const movGR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2 ORDER BY 1,2`, 'movMR', cache, hotStartYM, isIncremental);
+    const movGR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       SUM(I.QTD_ITEM) QTD, SUM(I.VLR_CUSTO) CUSTO
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
-      WHERE N.STATUS='E' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
-      GROUP BY 1,2 ORDER BY 1,2`);
-    const czR = await q(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+      WHERE N.STATUS='E' AND N.NF_MODELO='GR' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2 ORDER BY 1,2`, 'movGR', cache, hotStartYM, isIncremental);
+    const czR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
       SUM(CASE WHEN COALESCE(I.VLR_CUSTO,0)=0 THEN I.QTD_ITEM ELSE 0 END) QTD_SEM_CUSTO,
       SUM(CASE WHEN COALESCE(I.VLR_CUSTO,0)=0 THEN I.VLR_TOTAL-I.VLR_DESC ELSE 0 END) VLR_SEM_CUSTO,
       SUM(I.QTD_ITEM) QTD_TOTAL, SUM(I.VLR_TOTAL-I.VLR_DESC) VLR_TOTAL_VENDA
       FROM TB_NFV_ITEM I JOIN TB_NFVENDA N ON N.ID_NFVENDA=I.ID_NFVENDA
-      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${s}' AND N.DT_EMISSAO<DATE '${e}'
-      GROUP BY 1,2 ORDER BY 1,2`);
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2 ORDER BY 1,2`, 'czR', cache, hotStartYM, isIncremental);
     const sk1R = await q(db, `SELECT COUNT(DISTINCT I.ID_IDENTIFICADOR) C FROM TB_NFV_ITEM I
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=I.ID_NFVENDA
       WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${s}' AND COALESCE(I.VLR_CUSTO,0)=0`);
@@ -395,13 +457,13 @@ async function buildDados(s, e, months) {
         CASE WHEN R.DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM R.DT_VENCTO) END,
         CASE WHEN R.DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM R.DT_VENCTO) END`);
 
-    const rvpbR = await q(db, `SELECT EXTRACT(YEAR FROM R.DT_BAIXA) ANO, EXTRACT(MONTH FROM R.DT_BAIXA) MES, SUM(R.VLR_RECEBIDO) REC
+    const rvpbR = await qHot(db, `SELECT EXTRACT(YEAR FROM R.DT_BAIXA) ANO, EXTRACT(MONTH FROM R.DT_BAIXA) MES, SUM(R.VLR_RECEBIDO) REC
       FROM V_CONTAS_RECEBER R
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
       JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND F.DESCRICAO IN ('Prazo','Cheque') AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${s}'
-      GROUP BY 1,2`);
+      WHERE N.STATUS='E' AND F.DESCRICAO IN ('Prazo','Cheque') AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}'
+      GROUP BY 1,2`, 'rvpbR', cache, hotStartYM, isIncremental);
     console.log('vencimento prazo OK');
 
     const rpfR = await q(db, `SELECT F.DESCRICAO FORMA, SUM(R.VLR_CTAREC) VALOR
@@ -440,25 +502,25 @@ async function buildDados(s, e, months) {
         CASE WHEN DT_EMISSAO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM DT_EMISSAO) END`);
     console.log('venc todas formas OK');
 
-    const rbpR = await q(db, `SELECT EXTRACT(YEAR FROM R.DT_BAIXA) ANO, EXTRACT(MONTH FROM R.DT_BAIXA) MES,
+    const rbpR = await qHot(db, `SELECT EXTRACT(YEAR FROM R.DT_BAIXA) ANO, EXTRACT(MONTH FROM R.DT_BAIXA) MES,
       SUM(CASE WHEN R.DT_BAIXA<=R.DT_VENCTO THEN R.VLR_RECEBIDO ELSE 0 END) EM_DIA,
       SUM(CASE WHEN R.DT_BAIXA>R.DT_VENCTO THEN R.VLR_RECEBIDO ELSE 0 END) ATRASO, SUM(R.VLR_RECEBIDO) TOTAL
       FROM V_CONTAS_RECEBER R
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
       JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND F.DESCRICAO='Prazo' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${s}'
-      GROUP BY 1,2 ORDER BY 1,2`);
+      WHERE N.STATUS='E' AND F.DESCRICAO='Prazo' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}'
+      GROUP BY 1,2 ORDER BY 1,2`, 'rbpR', cache, hotStartYM, isIncremental);
 
-    const pmrR = await q(db, `SELECT EXTRACT(YEAR FROM R.DT_BAIXA) ANO, EXTRACT(MONTH FROM R.DT_BAIXA) MES,
+    const pmrR = await qHot(db, `SELECT EXTRACT(YEAR FROM R.DT_BAIXA) ANO, EXTRACT(MONTH FROM R.DT_BAIXA) MES,
       SUM(R.VLR_RECEBIDO) TOTAL, SUM((R.DT_BAIXA-R.DT_EMISSAO)*R.VLR_RECEBIDO) SOMA_DIAS
       FROM V_CONTAS_RECEBER R
       JOIN TB_NFVENDA N ON N.ID_NFVENDA=R.ID_NFVENDA
       JOIN TB_NFVENDA_FMAPAGTO_NFCE P ON P.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_FORMA_PAGTO_NFCE F ON F.ID_FMANFCE=P.ID_FMANFCE
-      WHERE N.STATUS='E' AND F.DESCRICAO='Prazo' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${s}'
+      WHERE N.STATUS='E' AND F.DESCRICAO='Prazo' AND R.DT_BAIXA IS NOT NULL AND R.DT_BAIXA>=DATE '${sA}'
         AND R.DT_EMISSAO>=DATE '${s}' AND R.DT_EMISSAO IS NOT NULL
-      GROUP BY 1,2 ORDER BY 1,2`);
+      GROUP BY 1,2 ORDER BY 1,2`, 'pmrR', cache, hotStartYM, isIncremental);
     console.log('receber PMR OK');
 
     // ── PAGAR ───────────────────────────────────────────────────────────────
@@ -501,20 +563,20 @@ async function buildDados(s, e, months) {
       ORDER BY DT_EMISSAO`);
     console.log('pagar detalhe OK (' + detR.length + ' records)');
 
-    const baixaR = await q(db, `SELECT EXTRACT(YEAR FROM DT_BAIXA) ANO, EXTRACT(MONTH FROM DT_BAIXA) MES,
+    const baixaR = await qHot(db, `SELECT EXTRACT(YEAR FROM DT_BAIXA) ANO, EXTRACT(MONTH FROM DT_BAIXA) MES,
       SUM(CASE WHEN DT_BAIXA<=DT_VENCTO THEN VLR_PAGTO ELSE 0 END) EM_DIA,
       SUM(CASE WHEN DT_BAIXA>DT_VENCTO THEN VLR_PAGTO ELSE 0 END) ATRASO, SUM(VLR_PAGTO) TOTAL
       FROM V_CONTAS_PAGAR
-      WHERE DT_BAIXA IS NOT NULL AND DT_BAIXA>=DATE '${s}' AND DT_BAIXA<DATE '${e}'
+      WHERE DT_BAIXA IS NOT NULL AND DT_BAIXA>=DATE '${sA}' AND DT_BAIXA<DATE '${e}'
         AND (DESCRICAO_CTA<>'AJUSTES' OR DESCRICAO_CTA IS NULL)
-      GROUP BY 1,2 ORDER BY 1,2`);
+      GROUP BY 1,2 ORDER BY 1,2`, 'baixaR', cache, hotStartYM, isIncremental);
 
-    const pmpPR = await q(db, `SELECT EXTRACT(YEAR FROM DT_BAIXA) ANO, EXTRACT(MONTH FROM DT_BAIXA) MES,
+    const pmpPR = await qHot(db, `SELECT EXTRACT(YEAR FROM DT_BAIXA) ANO, EXTRACT(MONTH FROM DT_BAIXA) MES,
       SUM(VLR_PAGTO) TOTAL, SUM((DT_BAIXA-DT_EMISSAO)*VLR_PAGTO) SOMA_DIAS
       FROM V_CONTAS_PAGAR
-      WHERE DT_BAIXA IS NOT NULL AND DT_BAIXA>=DATE '${s}' AND DT_EMISSAO IS NOT NULL
+      WHERE DT_BAIXA IS NOT NULL AND DT_BAIXA>=DATE '${sA}' AND DT_EMISSAO IS NOT NULL
         AND (DESCRICAO_CTA<>'AJUSTES' OR DESCRICAO_CTA IS NULL)
-      GROUP BY 1,2 ORDER BY 1,2`);
+      GROUP BY 1,2 ORDER BY 1,2`, 'pmpPR', cache, hotStartYM, isIncremental);
 
     const ajR = await q(db, `SELECT COUNT(*) QTD, COALESCE(SUM(VLR_CTAPAG),0) VALOR FROM V_CONTAS_PAGAR WHERE DESCRICAO_CTA='AJUSTES'`);
     console.log('pagar baixa+PMP+ajustes OK');
@@ -550,16 +612,16 @@ async function buildDados(s, e, months) {
     const inativosR = await q(db, `SELECT DESCRICAO CONTA, SD_REAL SALDO
       FROM TB_BANCO_CTA WHERE STATUS='I' ORDER BY DESCRICAO`).catch(() => []);
 
-    const cgR = await q(db, `SELECT EXTRACT(YEAR FROM DT_MOVTO) ANO, EXTRACT(MONTH FROM DT_MOVTO) MES,
+    const cgR = await qHot(db, `SELECT EXTRACT(YEAR FROM DT_MOVTO) ANO, EXTRACT(MONTH FROM DT_MOVTO) MES,
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE -VALOR END) SALDO_MES
-      FROM V_REL_FINAN_BANCOS_CAIXA WHERE DESCRICAO='Caixa Geral' GROUP BY 1,2 ORDER BY 1,2`);
+      FROM V_REL_FINAN_BANCOS_CAIXA WHERE DESCRICAO='Caixa Geral' AND DT_MOVTO>=DATE '${sA}' GROUP BY 1,2 ORDER BY 1,2`, 'cgR', cache, hotStartYM, isIncremental);
 
-    const totR = await q(db, `SELECT EXTRACT(YEAR FROM DT_MOVTO) ANO, EXTRACT(MONTH FROM DT_MOVTO) MES,
+    const totR = await qHot(db, `SELECT EXTRACT(YEAR FROM DT_MOVTO) ANO, EXTRACT(MONTH FROM DT_MOVTO) MES,
       SUM(CASE WHEN TIPO='ENTRADAS' THEN VALOR ELSE -VALOR END) SALDO_MES
       FROM V_REL_FINAN_BANCOS_CAIXA
-      WHERE DESCRICAO<>'AJUSTES'
+      WHERE DESCRICAO<>'AJUSTES' AND DT_MOVTO>=DATE '${sA}'
         AND COD_CONTA NOT IN (SELECT P.COD_CONTA FROM TB_BANCO_CTA B JOIN TB_PLANO_CONTAS P ON P.ID_CTAPLA=B.ID_CTAPLA WHERE B.STATUS='I')
-      GROUP BY 1,2 ORDER BY 1,2`);
+      GROUP BY 1,2 ORDER BY 1,2`, 'totR', cache, hotStartYM, isIncremental);
 
     const acertoR = await q(db, `SELECT DESCRICAO, TIPO, VALOR, DT_MOVTO, HISTORICO
       FROM V_REL_FINAN_BANCOS_CAIXA
@@ -569,6 +631,20 @@ async function buildDados(s, e, months) {
     // ─── ASSEMBLE ────────────────────────────────────────────────────────────
     db.detach();
     console.log('DB detached. Assembling DADOS...');
+
+    // Grava o cache local (chave CNPJ) com os arrays já mesclados (cache antigo + janela
+    // quente fresca), pra próxima conexão nessa mesma base poder ser incremental.
+    if (cnpj) {
+      saveCache(cnpj, {
+        cnpj,
+        ultimaSyncCompleta: isIncremental ? (cache && cache.ultimaSyncCompleta) || new Date().toISOString() : new Date().toISOString(),
+        ultimaSyncParcial: new Date().toISOString(),
+        queries: {
+          mensalR, vendR, pagR, cltR, nfR, cancR, cancGR, movMR, movGR, czR,
+          condM, condI, rvpbR, rbpR, pmrR, baixaR, pmpPR, cgR, totR,
+        },
+      });
+    }
 
     // ─ Vendas ─
     const mensalBK = {};
@@ -718,7 +794,8 @@ async function buildDados(s, e, months) {
     };
 
     console.log('DADOS assembled OK');
-    return { vendas, condicionais, estoque, receber, pagar, contas };
+    return { vendas, condicionais, estoque, receber, pagar, contas,
+      _sync: { incremental: isIncremental, hotMeses: HOT_MESES } };
 
   } catch(err) {
     try { db.detach(); } catch(e) {}
@@ -840,22 +917,28 @@ app.post('/api/connect', (req, res) => {
     db.query('SELECT COUNT(*) C FROM TB_NFVENDA', (err2, rows) => {
       if (err2) { db.detach(); return res.json({ ok:false, error:err2.message }); }
       const nfCount = rows&&rows[0] ? ri(rows[0].C) : 0;
-      // Dados do emitente (nome/cidade) — identifica de qual cliente é a base conectada.
-      db.query(`SELECT FIRST 1 e.NOME, e.NOME_FANTA, c.NOME CIDADE, c.SIGLA_UF UF
+      // Dados do emitente (nome/cidade/CNPJ) — identifica de qual cliente é a base conectada.
+      // CNPJ (normalizado, só dígitos) é a chave do cache local — sobrevive a mudança de
+      // caminho de arquivo/host, diferente de host+porta+database usado no resto do app.
+      db.query(`SELECT FIRST 1 e.NOME, e.NOME_FANTA, e.CNPJ, c.NOME CIDADE, c.SIGLA_UF UF
                  FROM TB_EMITENTE e LEFT JOIN TB_CIDADE_SIS c ON c.ID_CIDADE = e.ID_CIDADE`, (err3, erows) => {
         db.detach();
         dbConfig = cfg;
-        gravarBaseAtualIni(dbConfig, 'connect');
         let emitente = null;
         if (!err3 && erows && erows[0]) {
           const row = erows[0];
           const fanta = String(row.NOME_FANTA||'').split(' @')[0].trim();
+          const cnpj = String(row.CNPJ||'').replace(/\D/g, '');
+          dbConfig.cnpj = cnpj || null;
           emitente = {
             nome:   fanta || String(row.NOME||'').trim(),
             cidade: String(row.CIDADE||'').trim(),
             uf:     String(row.UF||'').trim(),
           };
+        } else {
+          dbConfig.cnpj = null;
         }
+        gravarBaseAtualIni(dbConfig, 'connect');
         res.json({ ok:true, nfCount, fbVersion: fbVersion||'2.5', emitente });
       });
     });
@@ -873,6 +956,20 @@ app.get('/api/dados', async (req, res) => {
     console.error('DADOS ERROR:', e.message);
     res.json({ ok:false, error:e.message });
   }
+});
+
+// Avançado: apaga o cache local da base atualmente conectada, forçando a próxima
+// /api/dados a reler tudo do zero. Exige a senha do Supervisor.
+app.post('/api/resync-completo', (req, res) => {
+  const { supervisorSenha } = req.body;
+  if (String(supervisorSenha||'') !== SUPERVISOR_SENHA) {
+    return res.json({ ok:false, error:'Senha de supervisor inválida.' });
+  }
+  if (!dbConfig.cnpj) {
+    return res.json({ ok:false, error:'Nenhuma base conectada com CNPJ identificado.' });
+  }
+  const apagou = limparCache(dbConfig.cnpj);
+  res.json({ ok:true, apagou });
 });
 
 // ─── Verificação de atualização ──────────────────────────────────────────────
