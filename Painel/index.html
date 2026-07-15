@@ -218,6 +218,7 @@ function brl(v){ return (v||0).toLocaleString('pt-BR', {style:'currency', curren
 function brl2(v){ return (v||0).toLocaleString('pt-BR', {style:'currency', currency:'BRL'}); }
 function num(v){ return (v||0).toLocaleString('pt-BR', {maximumFractionDigits:0}); }
 function pct(a,b){ return b ? (100*a/b).toFixed(0)+'%' : '0%'; }
+function pct1(a,b){ return b ? (100*a/b).toFixed(1)+'%' : '0%'; }
 function sum(arr,key){ return arr.reduce((s,x)=>s+(x[key]||0),0); }
 function groupSum(arr, groupKey, valueKey){
   const m = new Map();
@@ -513,7 +514,7 @@ function renderResumo(){
     linhasForca.push(`<b>Cobrança:</b> ${pct(carteiraVencido,carteiraAberto)} do contas a receber em aberto (${brl2(carteiraAberto)}) está vencido — ${brl2(carteiraVencido)} no total${carteiraVencidoLegado>0?`, sendo ${brl2(carteiraVencidoLegado)} de títulos anteriores a ${monthLabel(MESES[0].ano,MESES[0].mes)} (provável dívida de difícil recuperação)`:''}. Separar o recuperável do que já deveria ser baixado/negativado.`);
   }
   if (ctTotal > 0) {
-    linhasForca.push(`<b>A loja não conhece seus clientes:</b> ${pct(ctGen,ctTotal)} das vendas no período saem como "cliente genérico". É pré-requisito para qualquer ação de fidelidade/recompra identificar quem compra.`);
+    linhasForca.push(`<b>A loja não conhece seus clientes:</b> do faturamento fiscal + gerencial do período (${brl2(ctTotal)}), ${pct(ctGen,ctTotal)} saem para "cliente genérico" no cadastro. É pré-requisito para qualquer ação de fidelidade/recompra identificar quem compra.`);
   }
   if (condTrend) {
     const dir = condTrend.diffAbs>0 ? 'crescimento' : 'queda';
@@ -544,8 +545,8 @@ function renderResumo(){
     <div class="kpi"><div class="label">Ticket médio</div><div class="value">${brl2(ticket)}</div><div class="sub">faturamento fiscal ÷ qtd. vendas</div></div>
     <div class="kpi ${cancQtd>0?'warn':''}"><div class="label">Vendas canceladas (fiscal + gerencial)</div><div class="value">${brl(cancTotal)}</div><div class="sub">${brutoTotal>0?`${brl2(brutoTotal)} bruto − ${brl2(cancTotal)} cancelado = ${brl2(movimentoTotal)} líquido`:'sem cancelamentos no período'}</div></div>
     <div class="kpi ${margemPct<40?'warn':''}"><div class="label">Margem bruta estimada (CMV ajustado)</div><div class="value">${margemPct.toFixed(0)}%</div><div class="sub">${brl(movimentoTotal-cmvEstimado)} sobre ${brl(movimentoTotal)} — CMV inclui estimativa para itens vendidos sem custo cadastrado, ver aba Estoque</div></div>
-    <div class="kpi warn"><div class="label">% vendas cliente genérico</div><div class="value">${pct(ctGen,ctTotal)}</div><div class="sub">no período selecionado</div></div>
-    <div class="kpi ${vencInfo.naoRecebido>0?'bad':''}"><div class="label">A receber vencido (por vencimento no período)</div><div class="value">${brl(vencInfo.naoRecebido)}</div><div class="sub">${brl2(vencInfo.naoRecebidoEmitidoNoPeriodo)} (${pct(vencInfo.naoRecebidoEmitidoNoPeriodo,vencInfo.naoRecebido)}) foi emitido no mesmo período — o resto venceu agora mas é de vendas de períodos anteriores</div></div>
+    <div class="kpi warn"><div class="label">% vendas cliente genérico</div><div class="value">${pct(ctGen,ctTotal)}</div><div class="sub">do faturamento fiscal + gerencial do período, por identificação do cliente no cadastro</div></div>
+    <div class="kpi ${vencInfo.naoRecebido>0?'bad':''}"><div class="label">A receber vencido (venceu no período, ainda em aberto)</div><div class="value">${brl(vencInfo.naoRecebido)}</div><div class="sub">títulos com vencimento dentro do período selecionado, já vencidos hoje e ainda não recebidos — ${brl2(vencInfo.naoRecebidoEmitidoNoPeriodo)} (${pct1(vencInfo.naoRecebidoEmitidoNoPeriodo,vencInfo.naoRecebido)}) vêm de vendas também emitidas no período; o restante é dívida vencida agora, mas de vendas de períodos anteriores</div></div>
     <div class="kpi"><div class="label">A pagar vencido (títulos do período)</div><div class="value">${brl(pagVenc)}</div><div class="sub">de ${brl(pagEmit)} emitidos</div></div>
     <div class="kpi"><div class="label">Saldo em caixa/contas (hoje)</div><div class="value">${brl(saldoTotal)}</div><div class="sub">Caixa Geral: ${brl2(caixaGeralSaldo)} · ver aba Saldo das Contas</div></div>
     <div class="kpi"><div class="label">Conversão de condicionais</div><div class="value">${condTaxa}</div><div class="sub">${condTotal} pedidos no total (${condFin} finalizados / ${condRep} devolvidos)</div></div>
