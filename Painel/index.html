@@ -598,6 +598,16 @@ function renderVendas(){
     .map(x=>({nome:x.key, total:x.value, qtd: sum(periodArr(DADOS.vendas.produtosMensal).filter(r=>r.nome===x.key),'qtd')}))
     .sort((a,b)=>b.total-a.total).slice(0,10);
 
+  const PALETA_GRUPOS = ["#2c3e6b","#b3486b","#2e7d32","#e08e0b","#6b46c1","#0e7490","#be185d","#65a30d","#9333ea","#0369a1","#888"];
+  const grupoArr = periodArr(DADOS.vendas.grupoMensal);
+  const grupoAll = groupSum(grupoArr,'grupo','total')
+    .map(x=>({nome:x.key, total:x.value, qtd: sum(grupoArr.filter(r=>r.grupo===x.key),'qtd')}))
+    .sort((a,b)=>b.total-a.total);
+  const grupo = grupoAll.slice(0,9);
+  const grupoOutrosValor = sum(grupoAll.slice(9),'total'), grupoOutrosQtd = sum(grupoAll.slice(9),'qtd');
+  if (grupoOutrosValor > 0.01) grupo.push({nome:'Outros', total:grupoOutrosValor, qtd:grupoOutrosQtd});
+  grupo.forEach((g,i)=>{ g.cor = PALETA_GRUPOS[i%PALETA_GRUPOS.length]; });
+
   const pgtoArr = periodArr(DADOS.vendas.pagamentoMensal).filter(p=>p.forma!=='Nenhum');
   const pgto = groupSum(pgtoArr,'forma','total').map(x=>({forma:x.key,total:x.value})).sort((a,b)=>b.total-a.total);
   const pgtoTotal = sum(pgto,'total');
@@ -680,6 +690,14 @@ function renderVendas(){
       <tbody>${vend.map(v=>`<tr><td>${v.nome}</td><td class="num">${num(v.qtd)}</td><td class="num">${brl2(v.total)}</td></tr>`).join('') || '<tr><td colspan=3>Sem dados no período</td></tr>'}</tbody></table>
     </section>
   </div>
+
+  <section class="panel">
+    <h2>Vendas por grupo de produto</h2>
+    <div class="desc">Faturamento fiscal do período, agrupado pelo grupo de produto cadastrado no estoque</div>
+    ${grupo.length ? pieChartHTML(grupo, g=>g.nome, g=>g.total, g=>g.cor) : '<div class="desc">Sem dados no período</div>'}
+    <table style="margin-top:16px"><thead><tr><th>Grupo</th><th class="num">Qtd</th><th class="num">Receita</th><th class="num">%</th></tr></thead>
+    <tbody>${grupo.map(g=>`<tr><td>${g.nome}</td><td class="num">${num(g.qtd)}</td><td class="num">${brl2(g.total)}</td><td class="num">${pct(g.total,sum(grupo,'total'))}</td></tr>`).join('') || '<tr><td colspan=4>Sem dados no período</td></tr>'}</tbody></table>
+  </section>
 
   <section class="panel">
     <h2>Forma de pagamento (detalhado)</h2>
@@ -1116,6 +1134,11 @@ function renderPagar(){
   const pmpM = periodArr(DADOS.pagar.pmpMensal);
   const pmpTotal = sum(pmpM,'total'), pmpDias = sum(pmpM,'somaDias');
   const pmp = pmpTotal ? (pmpDias/pmpTotal) : 0;
+
+  const prevP = periodArr(DADOS.pagar.vencimentoMensal);
+  const totalPrevistoP = sum(prevP,'devido');
+  const totalPagoNoMes = sum(prevP,'pagoNoMes');
+
   return `<h2 style="margin-top:0">Contas a Pagar</h2>
   <div class="callout yellow">
     <b>Achado — lançamento genérico na conta "AJUSTES":</b> ${aj.texto}
@@ -1124,6 +1147,20 @@ function renderPagar(){
     `<div class="kpis" style="margin-bottom:10px">
       <div class="kpi"><div class="label">PMP — Prazo Médio de Pagamento</div><div class="value">${pmp.toFixed(0)} dias</div><div class="sub">Média ponderada por valor, entre data de emissão e data de baixa, dos títulos pagos no período</div></div>
     </div>
+    <section class="panel">
+      <h2>Previsto x Pago</h2>
+      <div class="desc">Por mês: <b>Previsto</b> = valor com vencimento naquele mês (de qualquer conta, não importa quando foi lançada) · <b>Pago</b> = valor que de fato saiu do caixa naquele mês (baixas), não importa de qual vencimento</div>
+      <div class="kpis" style="margin-bottom:10px">
+        <div class="kpi"><div class="label">Previsto no período</div><div class="value">${brl(totalPrevistoP)}</div></div>
+        <div class="kpi ${totalPagoNoMes<totalPrevistoP?'warn':'good'}"><div class="label">Pago no período</div><div class="value">${brl(totalPagoNoMes)}</div><div class="sub">${pct(totalPagoNoMes,totalPrevistoP)} do previsto</div></div>
+      </div>
+      <div class="barchart">${stackedBarChartHTML(prevP, m=>monthLabel(m.ano,m.mes), [
+        {label:'Previsto', color:'#cbd0db', valueFn:m=>m.devido},
+      ])}</div>
+      <div class="note" style="margin-bottom:14px">↑ Previsto (vencimento no mês)</div>
+      <div class="barchart">${barChartHTML(prevP, m=>monthLabel(m.ano,m.mes), m=>m.pagoNoMes)}</div>
+      <div class="note">↑ Pago de fato (baixas no mês, de qualquer vencimento)</div>
+    </section>
     <section class="panel">
       <h2>Por plano de contas (categoria de despesa)</h2>
       <div class="desc">Títulos com vencimento dentro do período selecionado, agrupados pela categoria do plano de contas — top 9 + "Outros". Clique numa categoria para ver as operações.</div>
@@ -1481,6 +1518,11 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchAndInit(dbPath, host, parseInt(port)||3050, 'SYSDBA', 'masterkey', fbVer);
   });
 
+  document.getElementById('cancelDbBtn').addEventListener('click', () => {
+    document.getElementById('connectError').style.display = 'none';
+    document.getElementById('dbModal').style.display = 'none';
+  });
+
   document.getElementById('toggleAvancado').addEventListener('click', (ev) => {
     ev.preventDefault();
     const box = document.getElementById('avancadoBox');
@@ -1611,10 +1653,16 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
     </div>
     <div id="connectError" style="display:none;color:#c62828;font-size:.85rem;margin-bottom:12px;padding:8px 12px;background:#fdecea;border-radius:6px;"></div>
-    <button id="connectBtn"
-      style="width:100%;padding:12px;background:#3f6fb5;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:700;cursor:pointer;letter-spacing:.02em;">
-      Conectar e carregar dados
-    </button>
+    <div style="display:flex;gap:10px;">
+      <button id="connectBtn"
+        style="flex:1;padding:12px;background:#3f6fb5;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:700;cursor:pointer;letter-spacing:.02em;">
+        Conectar e carregar dados
+      </button>
+      <button id="cancelDbBtn"
+        style="padding:12px 18px;background:#eee;color:#555;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;">
+        Cancelar
+      </button>
+    </div>
     <p style="margin:14px 0 0;font-size:.78rem;color:#888;text-align:center;">
       Credenciais: SYSDBA / masterkey · porta 3050
     </p>

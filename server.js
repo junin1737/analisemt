@@ -327,6 +327,16 @@ async function buildDados(s, e, months) {
     }
     console.log('produtos top15 OK');
 
+    const grupoR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+      COALESCE(G.DESCRICAO,'Sem grupo') GRUPO, SUM(I.QTD_ITEM) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
+      FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
+      JOIN TB_EST_IDENTIFICADOR EI ON EI.ID_IDENTIFICADOR=I.ID_IDENTIFICADOR
+      JOIN TB_ESTOQUE E ON E.ID_ESTOQUE=EI.ID_ESTOQUE
+      LEFT JOIN TB_EST_GRUPO G ON G.ID_GRUPO=E.ID_GRUPO
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2,3 ORDER BY 1,2,5 DESC`, 'grupoR', cache, hotStartYM, isIncremental);
+    console.log('produtos por grupo OK');
+
     // ── CONDICIONAIS ────────────────────────────────────────────────────────
     const condM = await qHot(db, `SELECT EXTRACT(YEAR FROM P.DT_PEDIDO) ANO, EXTRACT(MONTH FROM P.DT_PEDIDO) MES,
       CASE WHEN P.ID_STATUS=9 THEN 'Finalizado' WHEN P.ID_STATUS=2 THEN 'Reprovado' ELSE 'Em andamento' END STATUS,
@@ -518,7 +528,8 @@ async function buildDados(s, e, months) {
       CASE WHEN DT_EMISSAO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM DT_EMISSAO) END EA,
       CASE WHEN DT_EMISSAO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM DT_EMISSAO) END EM,
       SUM(VLR_CTAREC) DEVIDO,
-      SUM(CASE WHEN DT_BAIXA IS NULL AND DT_VENCTO<CURRENT_DATE THEN VLR_CTAREC ELSE 0 END) NAO_RECEBIDO
+      SUM(CASE WHEN DT_BAIXA IS NULL AND DT_VENCTO<CURRENT_DATE AND COALESCE(TIP_RECBTO,'')<>'B' AND COALESCE(TIP_RECBTO,'')<>'C'
+        THEN VLR_CTAREC-COALESCE(VLR_RECEBIDO,0) ELSE 0 END) NAO_RECEBIDO
       FROM V_CONTAS_RECEBER
       GROUP BY
         CASE WHEN DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM DT_VENCTO) END,
@@ -566,6 +577,17 @@ async function buildDados(s, e, months) {
         CASE WHEN DT_EMISSAO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM DT_EMISSAO) END
       ORDER BY 1,2`);
     console.log('pagar mensal OK');
+
+    const pvpR = await q(db, `SELECT
+      CASE WHEN DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM DT_VENCTO) END ANO,
+      CASE WHEN DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM DT_VENCTO) END MES,
+      COUNT(*) QTD, SUM(VLR_CTAPAG) DEVIDO
+      FROM V_CONTAS_PAGAR WHERE (DESCRICAO_CTA<>'AJUSTES' OR DESCRICAO_CTA IS NULL)
+      GROUP BY
+        CASE WHEN DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM DT_VENCTO) END,
+        CASE WHEN DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(MONTH FROM DT_VENCTO) END
+      ORDER BY 1,2`);
+    console.log('previsto pagar OK');
 
     const planoR = await q(db, `SELECT
       CASE WHEN DT_VENCTO<DATE '${s}' THEN 0 ELSE EXTRACT(YEAR FROM DT_VENCTO) END ANO,
@@ -670,7 +692,7 @@ async function buildDados(s, e, months) {
         ultimaSyncParcial: new Date().toISOString(),
         queries: {
           mensalR, vendR, pagR, cltR, nfR, cancR, cancGR, movMR, movGR, czR,
-          condM, condI, rvpbR, rbpR, pmrR, baixaR, pmpPR, cgR, totR,
+          condM, condI, rvpbR, rbpR, pmrR, baixaR, pmpPR, cgR, totR, grupoR,
         },
       });
     }
@@ -697,6 +719,7 @@ async function buildDados(s, e, months) {
       mensal,
       vendedorasMensal: vendR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), nome:String(r.NOME||''), qtd:ri(r.QTD), total:r2(r.TOTAL) })),
       produtosMensal: prodOrder.map(k => mergedProd[k]),
+      grupoMensal: grupoR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), grupo:String(r.GRUPO||''), qtd:ri(r.QTD), total:r2(r.TOTAL) })),
       pagamentoMensal: pagR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), forma:normForma(String(r.FORMA||'')), total:r2(r.TOTAL) })),
       pagamentoNota: 'Inclui vendas fiscais (NFC-e modelo 65, NF-e modelo 55) e gerenciais (modelo GR) juntas.',
       naoFiscalNota: 'O detalhe por forma de pagamento acima já inclui as vendas só-gerenciais (GR), não só as fiscais — o que fica de fora são as (raras) vendas sem nenhuma forma de pagamento registrada no sistema.',
@@ -781,6 +804,13 @@ async function buildDados(s, e, months) {
     const pagBK={}; pagMR.filter(r=>ri(r.ANO)>0).forEach(r=>{pagBK[`${r.ANO}-${r.MES}`]=r;});
     const baixaBK={}; baixaR.forEach(r=>{baixaBK[`${r.ANO}-${r.MES}`]=r;});
     const pmpPBK={}; pmpPR.forEach(r=>{pmpPBK[`${r.ANO}-${r.MES}`]=r;});
+    const pvpBK={}; pvpR.filter(r=>ri(r.ANO)>0).forEach(r=>{pvpBK[`${r.ANO}-${r.MES}`]=r;});
+    const pvpLeg = pvpR.find(r=>ri(r.ANO)===0);
+    const vencimentoMensal = months.map(m=>{
+      const p = pvpBK[`${m.ano}-${m.mes}`]||null, b = baixaBK[`${m.ano}-${m.mes}`]||null;
+      return { ano:m.ano, mes:m.mes, qtd:p?ri(p.QTD):0, devido:p?r2(p.DEVIDO):0, pagoNoMes:b?r2(b.TOTAL):0 };
+    });
+    if (pvpLeg) vencimentoMensal.unshift({ ano:0, mes:0, qtd:ri(pvpLeg.QTD), devido:r2(pvpLeg.DEVIDO), pagoNoMes:0 });
     const ajQtd=ri(ajR[0]&&ajR[0].QTD), ajVal=r2(ajR[0]&&ajR[0].VALOR);
     const pagar = {
       legado: pagLegado,
@@ -790,6 +820,7 @@ async function buildDados(s, e, months) {
       detalhe: detR.map(r=>({id:ri(r.ID_CTAPAG),doc:String(r.DOC||''),hist:String(r.HIST||''),dt:String(r.DT||''),venc:String(r.VENC||''),valor:r2(r.VALOR),categoria:String(r.CATEGORIA||''),fornecedor:String(r.FORNECEDOR||''),baixado:!!ri(r.BAIXADO),ano:ri(r.ANO),mes:ri(r.MES)})),
       baixaMensal: months.map(m=>{const r=baixaBK[`${m.ano}-${m.mes}`]||null; return {ano:m.ano,mes:m.mes,emDia:r?r2(r.EM_DIA):0,atraso:r?r2(r.ATRASO):0,total:r?r2(r.TOTAL):0};}),
       pmpMensal: months.map(m=>{const r=pmpPBK[`${m.ano}-${m.mes}`]||null; return {ano:m.ano,mes:m.mes,total:r?r2(r.TOTAL):0,somaDias:r?r2(r.SOMA_DIAS):0};}),
+      vencimentoMensal,
     };
 
     // ─ Contas ─
