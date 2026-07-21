@@ -200,6 +200,7 @@ let _updateLatest = '';
 const ALL_TABS = [
   { key:'resumo',     label:'Resumo' },
   { key:'vendas',     label:'Vendas' },
+  { key:'lucro',      label:'Lucro por Produto' },
   { key:'estoque',    label:'Estoque' },
   { key:'receber',    label:'Contas a Receber' },
   { key:'pagar',      label:'Contas a Pagar' },
@@ -296,7 +297,7 @@ function pctBarChartHTML(items, labelFn, pctFn, colorFn){
 }
 
 /* ===================== STATE ===================== */
-const state = { de: idxOf(2025,7), ate: idxOf(2026,6), tab: 'resumo', pagarCategoriaDetalhe: null };
+const state = { de: idxOf(2025,7), ate: idxOf(2026,6), tab: 'resumo', pagarCategoriaDetalhe: null, lucroFiltro: '', lucroOrdem: 'lucro' };
 
 function selectedMonths(){ return MESES.filter(m=>inRange(m.idx,state.de,state.ate)); }
 function filtroLabel(){
@@ -428,7 +429,7 @@ function renderAll(){
   } else {
     alertaEl.style.display = 'none';
   }
-  const fns = { resumo:renderResumo, vendas:renderVendas, estoque:renderEstoque, receber:renderReceber, pagar:renderPagar, equilibrio:renderEquilibrio, contas:renderContas, configuracoes:renderConfiguracoes };
+  const fns = { resumo:renderResumo, vendas:renderVendas, lucro:renderLucroProduto, estoque:renderEstoque, receber:renderReceber, pagar:renderPagar, equilibrio:renderEquilibrio, contas:renderContas, configuracoes:renderConfiguracoes };
   document.getElementById('tabContent').innerHTML = fns[state.tab] ? fns[state.tab]() : '';
   if (state.tab === 'configuracoes') loadConfiguracoes();
 }
@@ -601,12 +602,14 @@ function renderVendas(){
   const PALETA_GRUPOS = ["#2c3e6b","#b3486b","#2e7d32","#e08e0b","#6b46c1","#0e7490","#be185d","#65a30d","#9333ea","#0369a1","#888"];
   const grupoArr = periodArr(DADOS.vendas.grupoMensal);
   const grupoAll = groupSum(grupoArr,'grupo','total')
-    .map(x=>({nome:x.key, total:x.value, qtd: sum(grupoArr.filter(r=>r.grupo===x.key),'qtd')}))
+    .map(x=>({nome:x.key, total:x.value,
+      qtd: sum(grupoArr.filter(r=>r.grupo===x.key),'qtd'),
+      custo: sum(grupoArr.filter(r=>r.grupo===x.key),'custo')}))
     .sort((a,b)=>b.total-a.total);
   const grupo = grupoAll.slice(0,9);
-  const grupoOutrosValor = sum(grupoAll.slice(9),'total'), grupoOutrosQtd = sum(grupoAll.slice(9),'qtd');
-  if (grupoOutrosValor > 0.01) grupo.push({nome:'Outros', total:grupoOutrosValor, qtd:grupoOutrosQtd});
-  grupo.forEach((g,i)=>{ g.cor = PALETA_GRUPOS[i%PALETA_GRUPOS.length]; });
+  const grupoOutrosValor = sum(grupoAll.slice(9),'total'), grupoOutrosQtd = sum(grupoAll.slice(9),'qtd'), grupoOutrosCusto = sum(grupoAll.slice(9),'custo');
+  if (grupoOutrosValor > 0.01) grupo.push({nome:'Outros', total:grupoOutrosValor, qtd:grupoOutrosQtd, custo:grupoOutrosCusto});
+  grupo.forEach((g,i)=>{ g.cor = PALETA_GRUPOS[i%PALETA_GRUPOS.length]; g.lucro = g.total-g.custo; });
 
   const pgtoArr = periodArr(DADOS.vendas.pagamentoMensal).filter(p=>p.forma!=='Nenhum');
   const pgto = groupSum(pgtoArr,'forma','total').map(x=>({forma:x.key,total:x.value})).sort((a,b)=>b.total-a.total);
@@ -693,10 +696,10 @@ function renderVendas(){
 
   <section class="panel">
     <h2>Vendas por grupo de produto</h2>
-    <div class="desc">Faturamento fiscal do período, agrupado pelo grupo de produto cadastrado no estoque</div>
+    <div class="desc">Faturamento (fiscal + gerencial) do período, agrupado pelo grupo de produto cadastrado no estoque — custo é o mesmo usado na margem bruta estimada do Resumo</div>
     ${grupo.length ? pieChartHTML(grupo, g=>g.nome, g=>g.total, g=>g.cor) : '<div class="desc">Sem dados no período</div>'}
-    <table style="margin-top:16px"><thead><tr><th>Grupo</th><th class="num">Qtd</th><th class="num">Receita</th><th class="num">%</th></tr></thead>
-    <tbody>${grupo.map(g=>`<tr><td>${g.nome}</td><td class="num">${num(g.qtd)}</td><td class="num">${brl2(g.total)}</td><td class="num">${pct(g.total,sum(grupo,'total'))}</td></tr>`).join('') || '<tr><td colspan=4>Sem dados no período</td></tr>'}</tbody></table>
+    <table style="margin-top:16px"><thead><tr><th>Grupo</th><th class="num">Qtd</th><th class="num">Venda</th><th class="num">Custo</th><th class="num">Lucro bruto</th><th class="num">Margem</th></tr></thead>
+    <tbody>${grupo.map(g=>`<tr><td>${g.nome}</td><td class="num">${num(g.qtd)}</td><td class="num">${brl2(g.total)}</td><td class="num">${brl2(g.custo)}</td><td class="num">${brl2(g.lucro)}</td><td class="num">${pct(g.lucro,g.total)}</td></tr>`).join('') || '<tr><td colspan=6>Sem dados no período</td></tr>'}</tbody></table>
   </section>
 
   <section class="panel">
@@ -729,6 +732,62 @@ function renderVendas(){
       <div class="kpi ${taxaPecas!=='—' && parseInt(taxaPecas)<50 ? 'bad':''}"><div class="label">Taxa de conversão (por peças)</div><div class="value">${taxaPecas}</div><div class="sub">peças finalizadas ÷ (finalizadas + devolvidas)</div></div>
     </div>
     <div class="callout muted">${DADOS.condicionais.nota} ${num(DADOS.condicionais.pedidosSemItem)} pedidos do histórico completo não têm item de venda vinculado (não entram na contagem de peças).</div>
+  </section>`;
+}
+
+function setLucroFiltro(v){ state.lucroFiltro = v; renderAll(); const el=document.getElementById('lucroFiltroInput'); if(el) el.focus(); }
+function setLucroOrdem(campo){ state.lucroOrdem = campo; renderAll(); }
+
+function renderLucroProduto(){
+  const arr = periodArr(DADOS.vendas.lucroProdutoMensal);
+  const porProduto = groupSum(arr,'nome','venda')
+    .map(x=>({
+      nome:x.key, venda:x.value,
+      custo: sum(arr.filter(r=>r.nome===x.key),'custo'),
+      qtd: sum(arr.filter(r=>r.nome===x.key),'qtd'),
+    }))
+    .map(p=>({...p, lucro:p.venda-p.custo, margem: p.venda ? (p.venda-p.custo)/p.venda*100 : 0}));
+
+  const totalVenda = sum(porProduto,'venda'), totalCusto = sum(porProduto,'custo'), totalLucro = totalVenda-totalCusto;
+  const totalMargem = totalVenda ? (totalLucro/totalVenda*100) : 0;
+
+  const filtro = (state.lucroFiltro||'').trim().toLowerCase();
+  const filtrados = (filtro ? porProduto.filter(p=>p.nome.toLowerCase().includes(filtro)) : porProduto)
+    .sort((a,b)=> state.lucroOrdem==='venda' ? b.venda-a.venda : b.lucro-a.lucro);
+
+  return `<h2 style="margin-top:0">Lucro por Produto</h2>
+  <div class="callout muted">Venda (fiscal + gerencial) menos custo cadastrado no CLIPP, por produto, no período selecionado. Produtos vendidos sem custo cadastrado aparecem com lucro artificialmente maior — ver aba <b>Estoque</b> para o total de vendas sem custo.</div>
+  <div class="kpis">
+    <div class="kpi"><div class="label">Venda no período</div><div class="value">${brl(totalVenda)}</div></div>
+    <div class="kpi"><div class="label">Custo no período</div><div class="value">${brl(totalCusto)}</div></div>
+    <div class="kpi"><div class="label">Lucro bruto</div><div class="value">${brl(totalLucro)}</div></div>
+    <div class="kpi ${totalMargem<40?'warn':''}"><div class="label">Margem bruta</div><div class="value">${totalMargem.toFixed(0)}%</div></div>
+  </div>
+  <section class="panel">
+    <h2>Relatório por produto</h2>
+    <div class="desc">${num(filtrados.length)} produto(s) ${filtro?'(filtrado)':''} no período selecionado</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px">
+      <input id="lucroFiltroInput" type="text" placeholder="Buscar produto..." value="${state.lucroFiltro||''}"
+        oninput="setLucroFiltro(this.value)"
+        style="flex:1; min-width:220px; padding:8px 10px; border:1px solid #ccd; border-radius:6px; font-size:.9rem;" />
+      <div style="display:flex; gap:6px">
+        <button onclick="setLucroOrdem('lucro')" style="padding:8px 12px; border-radius:6px; border:1px solid #ccd; cursor:pointer; background:${state.lucroOrdem==='lucro'?'#3f6fb5':'#fff'}; color:${state.lucroOrdem==='lucro'?'#fff':'#333'}; font-size:.85rem;">Ordenar por lucro</button>
+        <button onclick="setLucroOrdem('venda')" style="padding:8px 12px; border-radius:6px; border:1px solid #ccd; cursor:pointer; background:${state.lucroOrdem==='venda'?'#3f6fb5':'#fff'}; color:${state.lucroOrdem==='venda'?'#fff':'#333'}; font-size:.85rem;">Ordenar por venda</button>
+      </div>
+    </div>
+    <div style="max-height:600px; overflow-y:auto; border:1px solid var(--border); border-radius:8px">
+    <table style="margin:0">
+      <thead><tr><th style="position:sticky; top:0; background:#fff">Produto</th><th class="num" style="position:sticky; top:0; background:#fff">Qtd</th><th class="num" style="position:sticky; top:0; background:#fff">Venda</th><th class="num" style="position:sticky; top:0; background:#fff">Custo</th><th class="num" style="position:sticky; top:0; background:#fff">Lucro bruto</th><th class="num" style="position:sticky; top:0; background:#fff">Margem</th></tr></thead>
+      <tbody>${filtrados.map(p=>`<tr>
+        <td>${p.nome}</td>
+        <td class="num">${num(p.qtd)}</td>
+        <td class="num">${brl2(p.venda)}</td>
+        <td class="num">${brl2(p.custo)}</td>
+        <td class="num">${brl2(p.lucro)}</td>
+        <td class="num">${p.venda?pct(p.lucro,p.venda):'—'}</td>
+      </tr>`).join('') || '<tr><td colspan=6>Sem produtos no período selecionado</td></tr>'}</tbody>
+    </table>
+    </div>
   </section>`;
 }
 
@@ -1170,7 +1229,7 @@ function renderPagar(){
 }
 
 /* ===================== CONFIGURAÇÕES ===================== */
-const PERM_LABELS = { resumo:'Resumo', vendas:'Vendas', estoque:'Estoque', receber:'Receber', pagar:'Pagar', equilibrio:'Equilíbrio', contas:'Contas' };
+const PERM_LABELS = { resumo:'Resumo', vendas:'Vendas', lucro:'Lucro por Produto', estoque:'Estoque', receber:'Receber', pagar:'Pagar', equilibrio:'Equilíbrio', contas:'Contas' };
 
 function renderConfiguracoes() {
   return `<div id="configWrap"><div style="text-align:center;padding:40px;color:#aaa">Carregando…</div></div>`;

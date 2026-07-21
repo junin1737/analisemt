@@ -328,14 +328,23 @@ async function buildDados(s, e, months) {
     console.log('produtos top15 OK');
 
     const grupoR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
-      COALESCE(G.DESCRICAO,'Sem grupo') GRUPO, SUM(I.QTD_ITEM) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL
+      COALESCE(G.DESCRICAO,'Sem grupo') GRUPO, SUM(I.QTD_ITEM) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) TOTAL, SUM(I.VLR_CUSTO) CUSTO
       FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
       JOIN TB_EST_IDENTIFICADOR EI ON EI.ID_IDENTIFICADOR=I.ID_IDENTIFICADOR
       JOIN TB_ESTOQUE E ON E.ID_ESTOQUE=EI.ID_ESTOQUE
       LEFT JOIN TB_EST_GRUPO G ON G.ID_GRUPO=E.ID_GRUPO
-      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
       GROUP BY 1,2,3 ORDER BY 1,2,5 DESC`, 'grupoR', cache, hotStartYM, isIncremental);
     console.log('produtos por grupo OK');
+
+    const lucroProdR = await qHot(db, `SELECT EXTRACT(YEAR FROM N.DT_EMISSAO) ANO, EXTRACT(MONTH FROM N.DT_EMISSAO) MES,
+      E.DESCRICAO NOME, SUM(I.QTD_ITEM) QTD, SUM(I.VLR_TOTAL-I.VLR_DESC) VENDA, SUM(I.VLR_CUSTO) CUSTO
+      FROM TB_NFVENDA N JOIN TB_NFV_ITEM I ON I.ID_NFVENDA=N.ID_NFVENDA
+      JOIN TB_EST_IDENTIFICADOR EI ON EI.ID_IDENTIFICADOR=I.ID_IDENTIFICADOR
+      JOIN TB_ESTOQUE E ON E.ID_ESTOQUE=EI.ID_ESTOQUE
+      WHERE N.STATUS='E' AND N.NF_MODELO IN ('65','55','GR') AND I.CFOP<>'5929' AND N.DT_EMISSAO>=DATE '${sA}' AND N.DT_EMISSAO<DATE '${e}'
+      GROUP BY 1,2,3`, 'lucroProdR', cache, hotStartYM, isIncremental);
+    console.log('lucro por produto OK');
 
     // ── CONDICIONAIS ────────────────────────────────────────────────────────
     const condM = await qHot(db, `SELECT EXTRACT(YEAR FROM P.DT_PEDIDO) ANO, EXTRACT(MONTH FROM P.DT_PEDIDO) MES,
@@ -692,7 +701,7 @@ async function buildDados(s, e, months) {
         ultimaSyncParcial: new Date().toISOString(),
         queries: {
           mensalR, vendR, pagR, cltR, nfR, cancR, cancGR, movMR, movGR, czR,
-          condM, condI, rvpbR, rbpR, pmrR, baixaR, pmpPR, cgR, totR, grupoR,
+          condM, condI, rvpbR, rbpR, pmrR, baixaR, pmpPR, cgR, totR, grupoR, lucroProdR,
         },
       });
     }
@@ -719,7 +728,8 @@ async function buildDados(s, e, months) {
       mensal,
       vendedorasMensal: vendR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), nome:String(r.NOME||''), qtd:ri(r.QTD), total:r2(r.TOTAL) })),
       produtosMensal: prodOrder.map(k => mergedProd[k]),
-      grupoMensal: grupoR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), grupo:String(r.GRUPO||''), qtd:ri(r.QTD), total:r2(r.TOTAL) })),
+      grupoMensal: grupoR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), grupo:String(r.GRUPO||''), qtd:ri(r.QTD), total:r2(r.TOTAL), custo:r2(r.CUSTO) })),
+      lucroProdutoMensal: lucroProdR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), nome:String(r.NOME||''), qtd:ri(r.QTD), venda:r2(r.VENDA), custo:r2(r.CUSTO) })),
       pagamentoMensal: pagR.map(r => ({ ano:ri(r.ANO), mes:ri(r.MES), forma:normForma(String(r.FORMA||'')), total:r2(r.TOTAL) })),
       pagamentoNota: 'Inclui vendas fiscais (NFC-e modelo 65, NF-e modelo 55) e gerenciais (modelo GR) juntas.',
       naoFiscalNota: 'O detalhe por forma de pagamento acima já inclui as vendas só-gerenciais (GR), não só as fiscais — o que fica de fora são as (raras) vendas sem nenhuma forma de pagamento registrada no sistema.',
