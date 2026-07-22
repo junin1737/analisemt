@@ -735,18 +735,30 @@ function renderVendas(){
   </section>`;
 }
 
-function setLucroFiltro(v){ state.lucroFiltro = v; renderAll(); const el=document.getElementById('lucroFiltroInput'); if(el) el.focus(); }
+let lucroFiltroTimer = null;
+function setLucroFiltro(v){
+  state.lucroFiltro = v;
+  clearTimeout(lucroFiltroTimer);
+  lucroFiltroTimer = setTimeout(() => {
+    renderAll();
+    const el = document.getElementById('lucroFiltroInput');
+    if (el) { el.focus(); const p = el.value.length; el.setSelectionRange(p,p); }
+  }, 250);
+}
 function setLucroOrdem(campo){ state.lucroOrdem = campo; renderAll(); }
 
+const LUCRO_LIMITE_LINHAS = 300;
 function renderLucroProduto(){
   const arr = periodArr(DADOS.vendas.lucroProdutoMensal);
-  const porProduto = groupSum(arr,'nome','venda')
-    .map(x=>({
-      nome:x.key, venda:x.value,
-      custo: sum(arr.filter(r=>r.nome===x.key),'custo'),
-      qtd: sum(arr.filter(r=>r.nome===x.key),'qtd'),
-    }))
-    .map(p=>({...p, lucro:p.venda-p.custo, margem: p.venda ? (p.venda-p.custo)/p.venda*100 : 0}));
+  // Agregação em uma única passada — antes usava filter() por produto dentro de um .map(),
+  // o que para ~5 mil produtos distintos vira uma varredura O(produtos × linhas) e trava o render.
+  const porProdutoMap = new Map();
+  arr.forEach(r => {
+    let p = porProdutoMap.get(r.nome);
+    if (!p) { p = { nome:r.nome, venda:0, custo:0, qtd:0 }; porProdutoMap.set(r.nome, p); }
+    p.venda += r.venda; p.custo += r.custo; p.qtd += r.qtd;
+  });
+  const porProduto = [...porProdutoMap.values()].map(p=>({...p, lucro:p.venda-p.custo, margem: p.venda ? (p.venda-p.custo)/p.venda*100 : 0}));
 
   const totalVenda = sum(porProduto,'venda'), totalCusto = sum(porProduto,'custo'), totalLucro = totalVenda-totalCusto;
   const totalMargem = totalVenda ? (totalLucro/totalVenda*100) : 0;
@@ -754,6 +766,7 @@ function renderLucroProduto(){
   const filtro = (state.lucroFiltro||'').trim().toLowerCase();
   const filtrados = (filtro ? porProduto.filter(p=>p.nome.toLowerCase().includes(filtro)) : porProduto)
     .sort((a,b)=> state.lucroOrdem==='venda' ? b.venda-a.venda : b.lucro-a.lucro);
+  const mostrados = filtrados.slice(0, LUCRO_LIMITE_LINHAS);
 
   return `<h2 style="margin-top:0">Lucro por Produto</h2>
   <div class="callout muted">Venda (fiscal + gerencial) menos custo cadastrado no CLIPP, por produto, no período selecionado. Produtos vendidos sem custo cadastrado aparecem com lucro artificialmente maior — ver aba <b>Estoque</b> para o total de vendas sem custo.</div>
@@ -765,7 +778,7 @@ function renderLucroProduto(){
   </div>
   <section class="panel">
     <h2>Relatório por produto</h2>
-    <div class="desc">${num(filtrados.length)} produto(s) ${filtro?'(filtrado)':''} no período selecionado</div>
+    <div class="desc">${num(filtrados.length)} produto(s) ${filtro?'(filtrado)':''} no período selecionado${filtrados.length>LUCRO_LIMITE_LINHAS?` — mostrando os ${LUCRO_LIMITE_LINHAS} primeiros (${state.lucroOrdem==='venda'?'maior venda':'maior lucro'}); refine a busca para ver outros`:''}</div>
     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px">
       <input id="lucroFiltroInput" type="text" placeholder="Buscar produto..." value="${state.lucroFiltro||''}"
         oninput="setLucroFiltro(this.value)"
@@ -778,7 +791,7 @@ function renderLucroProduto(){
     <div style="max-height:600px; overflow-y:auto; border:1px solid var(--border); border-radius:8px">
     <table style="margin:0">
       <thead><tr><th style="position:sticky; top:0; background:#fff">Produto</th><th class="num" style="position:sticky; top:0; background:#fff">Qtd</th><th class="num" style="position:sticky; top:0; background:#fff">Venda</th><th class="num" style="position:sticky; top:0; background:#fff">Custo</th><th class="num" style="position:sticky; top:0; background:#fff">Lucro bruto</th><th class="num" style="position:sticky; top:0; background:#fff">Margem</th></tr></thead>
-      <tbody>${filtrados.map(p=>`<tr>
+      <tbody>${mostrados.map(p=>`<tr>
         <td>${p.nome}</td>
         <td class="num">${num(p.qtd)}</td>
         <td class="num">${brl2(p.venda)}</td>
