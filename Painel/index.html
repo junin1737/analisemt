@@ -261,6 +261,7 @@ const ALL_TABS = [
   { key:'receber',    label:'Contas a Receber' },
   { key:'pagar',      label:'Contas a Pagar' },
   { key:'equilibrio', label:'Ponto de Equilíbrio' },
+  { key:'dre',        label:'DRE Gerencial' },
   { key:'contas',     label:'Saldo das Contas' },
 ];
 
@@ -362,6 +363,13 @@ function filtroLabel(){
   const n = ms.length;
   return `${ms[0].label} – ${ms[ms.length-1].label} (${n} ${n===1?'mês':'meses'})`;
 }
+function filtroLabelRange(de, ate){
+  const ms = MESES.filter(m=>inRange(m.idx,de,ate));
+  if (!ms.length) return '';
+  const n = ms.length;
+  return `${ms[0].label} – ${ms[ms.length-1].label} (${n} ${n===1?'mês':'meses'})`;
+}
+function drePctFmt(v){ return ((v||0)*100).toFixed(1)+'%'; }
 
 /* ===================== TENDÊNCIAS (histórico completo carregado, não filtra por período) ===================== */
 function tendenciaCondicionais(){
@@ -485,13 +493,14 @@ function renderAll(){
   } else {
     alertaEl.style.display = 'none';
   }
-  const fns = { resumo:renderResumo, vendas:renderVendas, lucro:renderLucroProduto, estoque:renderEstoque, receber:renderReceber, pagar:renderPagar, equilibrio:renderEquilibrio, contas:renderContas, configuracoes:renderConfiguracoes };
+  const fns = { resumo:renderResumo, vendas:renderVendas, lucro:renderLucroProduto, estoque:renderEstoque, receber:renderReceber, pagar:renderPagar, equilibrio:renderEquilibrio, dre:renderDRE, contas:renderContas, configuracoes:renderConfiguracoes };
   document.getElementById('tabContent').innerHTML = fns[state.tab] ? fns[state.tab]() : '';
   if (state.tab === 'configuracoes') loadConfiguracoes();
 }
 
 function periodVendasMensal(){ return DADOS.vendas.mensal.filter(m=>inRange(idxOf(m.ano,m.mes), state.de, state.ate)); }
 function periodArr(arr){ return arr.filter(m=>inRange(idxOf(m.ano,m.mes), state.de, state.ate)); }
+function periodArrRange(arr, de, ate){ return arr.filter(m=>inRange(idxOf(m.ano,m.mes), de, ate)); }
 function periodVencimentoTodasFormas(){
   const agg = {};
   DADOS.receber.vencimentoTodasFormas.forEach(r=>{
@@ -1079,6 +1088,326 @@ function renderEquilibrio(){
   `;
 }
 
+/* ===================== DRE GERENCIAL ===================== */
+// CMV aqui usa o custo cadastrado por produto (mesma metodologia da aba Resumo/Lucro por
+// Produto - "cmvEstimado"), não o CMV do contas a pagar (regime de caixa) usado no Ponto de
+// Equilíbrio. São propositalmente duas fontes diferentes: o Ponto de Equilíbrio calculado
+// abaixo usa a mesma metodologia de caixa da aba Equilíbrio, pra ficar consistente com ela.
+function calcularDRE(de, ate){
+  const pr = (arr) => periodArrRange(arr, de, ate);
+
+  const vm = pr(DADOS.vendas.mensal);
+  const nf = pr(DADOS.vendas.naoFiscalMensal);
+  const fatFiscal = sum(vm,'total'), fatGer = sum(nf,'total');
+  const descontoFiscal = sum(vm,'desconto');
+  const movimentoTotal = fatFiscal + fatGer;
+
+  const cancFiscal = pr(DADOS.vendas.canceladoMensal);
+  const cancGer = pr(DADOS.vendas.canceladoGerencialMensal);
+  const cancelamentos = sum(cancFiscal,'total') + sum(cancGer,'total');
+
+  const receitaBruta = movimentoTotal + descontoFiscal + cancelamentos;
+  const receitaLiquida = movimentoTotal;
+
+  const movFiscalCusto = pr(DADOS.estoque.movMensal);
+  const movGerCusto = pr(DADOS.estoque.movMensalGerencial);
+  const custoRegistrado = sum(movFiscalCusto,'vlrCusto') + sum(movGerCusto,'vlrCusto');
+  const czM = pr(DADOS.estoque.custoZeradoMensal);
+  const vendaZerado = sum(czM,'vlrSemCusto');
+  const vendaComCusto = movimentoTotal - vendaZerado;
+  const margemComCusto = vendaComCusto ? (vendaComCusto-custoRegistrado)/vendaComCusto : 0;
+  const cmv = custoRegistrado + vendaZerado*(1-margemComCusto);
+
+  const lucroBruto = receitaLiquida - cmv;
+
+  const pc = classificaPagar(pr(DADOS.pagar.planoContasMensal));
+  const despVariavel = sum(pc.filter(r=>r.tipo==='Variavel'),'valor');
+  const despFixa = sum(pc.filter(r=>r.tipo==='Fixa'),'valor');
+  const despOperacionais = despVariavel + despFixa;
+
+  const resultadoOperacional = lucroBruto - despOperacionais;
+
+  const cmvPagar = sum(pc.filter(r=>r.tipo==='CMV'),'valor');
+  const mcCaixa = movimentoTotal - cmvPagar - despVariavel;
+  const mcCaixaPct = movimentoTotal ? mcCaixa/movimentoTotal : 0;
+  const pontoEquilibrio = mcCaixaPct > 0 ? despFixa/mcCaixaPct : 0;
+  const margemSeguranca = pontoEquilibrio ? (movimentoTotal-pontoEquilibrio)/movimentoTotal : (movimentoTotal>0?1:0);
+
+  const margemBruta = receitaLiquida ? lucroBruto/receitaLiquida : 0;
+  const margemOperacional = receitaLiquida ? resultadoOperacional/receitaLiquida : 0;
+  const margemContribuicao = receitaLiquida ? (receitaLiquida-cmv-despVariavel)/receitaLiquida : 0;
+
+  const qtdVendas = sum(vm,'qtd') + sum(nf,'qtd');
+  const ticketMedio = qtdVendas ? movimentoTotal/qtdVendas : 0;
+  const markup = cmv ? receitaLiquida/cmv : 0;
+
+  return {
+    de, ate, movimentoTotal,
+    receitaBruta, descontoFiscal, cancelamentos, receitaLiquida,
+    cmv, lucroBruto, despVariavel, despFixa, despOperacionais, resultadoOperacional,
+    pontoEquilibrio, margemSeguranca,
+    margemBruta, margemOperacional, margemContribuicao,
+    qtdVendas, ticketMedio, markup,
+    porCategoriaDespesas: pc,
+  };
+}
+
+function periodoAnteriorRange(de, ate){
+  const tam = ate-de+1;
+  const deAnt = de-tam, ateAnt = de-1;
+  return (deAnt>=0) ? {de:deAnt, ate:ateAnt} : null;
+}
+
+function dreVarPct(atual, anterior){
+  if (anterior === null || anterior === undefined || anterior === 0) return null;
+  return (atual-anterior)/Math.abs(anterior)*100;
+}
+function dreCor(atual, anterior, invertido){
+  const v = dreVarPct(atual, anterior);
+  if (v === null) return '';
+  const dir = invertido ? -v : v;
+  if (dir > 3) return 'good';
+  if (dir < -3) return 'bad';
+  return 'warn';
+}
+function dreSeta(atual, anterior){
+  const v = dreVarPct(atual, anterior);
+  if (v === null) return '→';
+  if (Math.abs(v) < 1) return '→';
+  return v>=0 ? '↑' : '↓';
+}
+function dreCardHTML(label, valorStr, atual, anterior, fmtAnterior, invertido){
+  const v = dreVarPct(atual, anterior);
+  const cor = dreCor(atual, anterior, invertido);
+  const seta = dreSeta(atual, anterior);
+  const sub = (anterior !== null && anterior !== undefined)
+    ? `${seta} ${v===null?'—':Math.abs(v).toFixed(1)+'%'} vs período anterior (${fmtAnterior(anterior)})`
+    : 'sem período anterior carregado pra comparar';
+  return `<div class="kpi ${cor}"><div class="label">${label}</div><div class="value">${valorStr}</div><div class="sub">${sub}</div></div>`;
+}
+
+function linhasDRE(a, b){
+  const mk = (label, campo, sinal, tipo) => ({
+    label, tipo,
+    valor: sinal * a[campo],
+    valorAnt: b ? sinal * b[campo] : null,
+  });
+  return [
+    mk('Receita Bruta de Vendas', 'receitaBruta', 1, 'normal'),
+    mk('(-) Descontos concedidos', 'descontoFiscal', -1, 'deducao'),
+    mk('(-) Cancelamentos', 'cancelamentos', -1, 'deducao'),
+    mk('(=) Receita Líquida', 'receitaLiquida', 1, 'subtotal'),
+    mk('(-) CMV (custo da mercadoria vendida)', 'cmv', -1, 'deducao'),
+    mk('(=) Lucro Bruto', 'lucroBruto', 1, 'subtotal'),
+    mk('(-) Despesas Variáveis', 'despVariavel', -1, 'deducao'),
+    mk('(-) Despesas Fixas', 'despFixa', -1, 'deducao'),
+    mk('(=) Resultado Operacional', 'resultadoOperacional', 1, 'total'),
+  ];
+}
+function dreTableRowHTML(row, receitaLiquidaAtual){
+  const pctRL = receitaLiquidaAtual ? (row.valor/receitaLiquidaAtual*100) : 0;
+  const temAnt = row.valorAnt !== null && row.valorAnt !== undefined;
+  const diff = temAnt ? row.valor - row.valorAnt : null;
+  const varP = (temAnt && row.valorAnt !== 0) ? (diff/Math.abs(row.valorAnt)*100) : null;
+  const destaque = row.tipo === 'subtotal' || row.tipo === 'total';
+  const estiloLinha = destaque ? 'font-weight:700;background:var(--card2)' : '';
+  const corVar = varP===null ? '' : `color:${varP>=0?'var(--good)':'var(--bad)'}`;
+  return `<tr style="${estiloLinha}">
+    <td>${row.label}</td>
+    <td class="num">${brl2(row.valor)}</td>
+    <td class="num">${pctRL.toFixed(1)}%</td>
+    <td class="num">${temAnt?brl2(row.valorAnt):'—'}</td>
+    <td class="num" style="${corVar}">${varP===null?'—':(varP>=0?'+':'')+varP.toFixed(1)+'%'}</td>
+    <td class="num">${temAnt?brl2(diff):'—'}</td>
+  </tr>`;
+}
+
+function dreMensal(de, ate){
+  return MESES.filter(mm=>inRange(mm.idx,de,ate)).map(mm=>({ ano:mm.ano, mes:mm.mes, ...calcularDRE(mm.idx, mm.idx) }));
+}
+
+function gerarInsightsDRE(a, b){
+  const insights = [];
+  const vReceita = dreVarPct(a.receitaLiquida, b?b.receitaLiquida:null);
+  const vLucro = dreVarPct(a.resultadoOperacional, b?b.resultadoOperacional:null);
+  const vCmvPct = b ? (a.cmv/(a.receitaLiquida||1)*100) - (b.cmv/(b.receitaLiquida||1)*100) : null;
+  const vDespPct = b ? (a.despOperacionais/(a.receitaLiquida||1)*100) - (b.despOperacionais/(b.receitaLiquida||1)*100) : null;
+
+  if (vReceita !== null && vLucro !== null) {
+    if (vReceita > 2 && vLucro < vReceita - 3) {
+      insights.push(`O faturamento cresceu ${vReceita.toFixed(1)}%, mas o resultado operacional ${vLucro>=0?`cresceu só ${vLucro.toFixed(1)}%`:`caiu ${Math.abs(vLucro).toFixed(1)}%`} — o crescimento de custos/despesas está comendo parte do ganho de receita.`);
+    } else if (vReceita > 2 && vLucro >= vReceita) {
+      insights.push(`O faturamento cresceu ${vReceita.toFixed(1)}% e o resultado operacional cresceu ainda mais (${vLucro.toFixed(1)}%) — a operação ficou mais eficiente, não só maior.`);
+    } else if (vReceita < -2) {
+      insights.push(`O faturamento caiu ${Math.abs(vReceita).toFixed(1)}% no período — vale entender se é sazonalidade ou perda real de vendas.`);
+    }
+  }
+  if (vCmvPct !== null && Math.abs(vCmvPct) > 1.5) {
+    insights.push(`O CMV foi de ${(b.cmv/(b.receitaLiquida||1)*100).toFixed(1)}% para ${(a.cmv/(a.receitaLiquida||1)*100).toFixed(1)}% da receita líquida — ${vCmvPct>0?'piorou':'melhorou'} ${Math.abs(vCmvPct).toFixed(1)} pontos percentuais.`);
+  }
+  if (vDespPct !== null && Math.abs(vDespPct) > 1.5) {
+    insights.push(`As despesas operacionais foram de ${(b.despOperacionais/(b.receitaLiquida||1)*100).toFixed(1)}% para ${(a.despOperacionais/(a.receitaLiquida||1)*100).toFixed(1)}% da receita líquida — ${vDespPct>0?'subiram':'caíram'} ${Math.abs(vDespPct).toFixed(1)} pontos percentuais em relação ao faturamento.`);
+  }
+  insights.push(`Margem bruta no período: ${(a.margemBruta*100).toFixed(1)}%. Margem de contribuição: ${(a.margemContribuicao*100).toFixed(1)}%.`);
+  if (a.movimentoTotal > 0 && a.pontoEquilibrio > 0) {
+    if (a.movimentoTotal >= a.pontoEquilibrio) {
+      insights.push(`A receita do período (${brl2(a.movimentoTotal)}) ficou ${pct(a.movimentoTotal-a.pontoEquilibrio, a.pontoEquilibrio)} acima do ponto de equilíbrio estimado (${brl2(a.pontoEquilibrio)}) — margem de segurança de ${(a.margemSeguranca*100).toFixed(1)}%.`);
+    } else {
+      insights.push(`A receita do período (${brl2(a.movimentoTotal)}) ficou abaixo do ponto de equilíbrio estimado (${brl2(a.pontoEquilibrio)}) — faltaram ${brl2(a.pontoEquilibrio-a.movimentoTotal)} pra cobrir os custos fixos.`);
+    }
+  }
+  const cats = a.porCategoriaDespesas.filter(r=>r.tipo==='Fixa'||r.tipo==='Variavel');
+  const porCat = groupSum(cats,'categoria','valor').sort((x,y)=>y.value-x.value);
+  if (porCat.length) {
+    const top = porCat[0];
+    insights.push(`Maior categoria de despesa do período: "${top.key}" (${brl2(top.value)}, ${pct(top.value,a.despOperacionais)} das despesas operacionais).`);
+  }
+  if (a.resultadoOperacional < 0) {
+    insights.push(`A empresa fechou o período com resultado operacional negativo (${brl2(a.resultadoOperacional)}) — CMV + despesas superaram a receita líquida.`);
+  }
+  return insights;
+}
+
+function recomendacoesDRE(a){
+  const rec = [];
+  if (a.margemBruta < 0.5) rec.push('Margem bruta abaixo de 50% — revisar preços de venda ou renegociar com fornecedores pra reduzir o CMV.');
+  if (a.despOperacionais && a.receitaLiquida && (a.despOperacionais/a.receitaLiquida) > 0.35) rec.push('Despesas operacionais acima de 35% da receita líquida — vale revisar despesas fixas (aluguel, folha, etc.) e cortar o que não é essencial.');
+  if (a.margemContribuicao < 0.3) rec.push('Margem de contribuição baixa — cada venda sobra pouco pra cobrir custo fixo; focar nos produtos/grupos mais rentáveis (ver aba Lucro por Produto).');
+  if (a.movimentoTotal > 0 && a.movimentoTotal < a.pontoEquilibrio) rec.push('Faturamento abaixo do ponto de equilíbrio — priorizar aumento de vendas ou corte de despesa fixa até fechar essa conta.');
+  if (a.ticketMedio && a.qtdVendas) rec.push(`Ticket médio atual de ${brl2(a.ticketMedio)} — ações de venda casada/upsell podem melhorar o resultado sem depender de mais clientes.`);
+  if (!rec.length) rec.push('Números do período dentro do esperado — manter o acompanhamento mensal da margem e das despesas fixas.');
+  return rec;
+}
+
+function renderDRE(){
+  const a = calcularDRE(state.de, state.ate);
+  const antRange = periodoAnteriorRange(state.de, state.ate);
+  const b = antRange ? calcularDRE(antRange.de, antRange.ate) : null;
+  const linhas = linhasDRE(a, b);
+  const mensal = dreMensal(state.de, state.ate);
+
+  const cmvMax = Math.max(1, ...mensal.map(m=>m.cmv+Math.max(0,m.lucroBruto)));
+  const vertical = [
+    {nome:'CMV', valor:a.cmv, cor:'#c62828'},
+    {nome:'Despesas Variáveis', valor:a.despVariavel, cor:'#e08e0b'},
+    {nome:'Despesas Fixas', valor:a.despFixa, cor:'#2c3e6b'},
+    {nome:'Resultado Operacional', valor:Math.max(0,a.resultadoOperacional), cor:'#2e7d32'},
+  ];
+
+  const PALETA_DESP = ["#c62828","#e08e0b","#2c3e6b","#6b46c1","#0e7490","#be185d","#65a30d","#9333ea","#0369a1","#888"];
+  const catsOp = a.porCategoriaDespesas.filter(r=>r.tipo==='Fixa'||r.tipo==='Variavel');
+  const despPorCatAll = groupSum(catsOp,'categoria','valor').map(x=>({nome:x.key,valor:x.value})).sort((x,y)=>y.valor-x.valor);
+  const despPorCat = despPorCatAll.slice(0,9);
+  const outrosValor = sum(despPorCatAll.slice(9),'valor');
+  if (outrosValor > 0.01) despPorCat.push({nome:'Outros', valor:outrosValor});
+  despPorCat.forEach((d,i)=>{ d.cor = PALETA_DESP[i%PALETA_DESP.length]; });
+
+  const totalDesp = sum(despPorCatAll,'valor');
+  let acc = 0;
+  const pareto = despPorCatAll.map(d=>{ acc += d.valor; return {...d, acumPct: totalDesp?acc/totalDesp*100:0}; });
+  const idx80 = pareto.findIndex(d=>d.acumPct>=80);
+
+  const insights = gerarInsightsDRE(a, b);
+  const recomendacoes = recomendacoesDRE(a);
+
+  return `<h2 style="margin-top:0">DRE Gerencial</h2>
+  <div class="callout blue">
+    <b>Metodologia:</b> Receita = movimento total (fiscal + gerencial). CMV = custo cadastrado por produto, com estimativa pros itens vendidos sem custo (mesma base da aba <b>Lucro por Produto</b>). Despesas Fixas/Variáveis vêm da classificação do plano de contas do contas a pagar (mesma base da aba <b>Ponto de Equilíbrio</b> — que usa um CMV via contas a pagar separado, por isso o Ponto de Equilíbrio abaixo pode não bater 1:1 com o Lucro Bruto acima). <b>Não há IRPJ, CSLL, depreciação ou amortização nessa base</b> — não é um sistema contábil/fiscal, então essas linhas não aparecem (o Resultado Operacional abaixo é o mais próximo de um "resultado final" que dá pra sustentar com esse dado).
+  </div>
+
+  <div class="kpis">
+    ${dreCardHTML('Receita Bruta', brl(a.receitaBruta), a.receitaBruta, b?b.receitaBruta:null, brl2)}
+    ${dreCardHTML('Receita Líquida', brl(a.receitaLiquida), a.receitaLiquida, b?b.receitaLiquida:null, brl2)}
+    ${dreCardHTML('CMV', brl(a.cmv), a.cmv, b?b.cmv:null, brl2, true)}
+    ${dreCardHTML('Lucro Bruto', brl(a.lucroBruto), a.lucroBruto, b?b.lucroBruto:null, brl2)}
+    ${dreCardHTML('Despesas Operacionais', brl(a.despOperacionais), a.despOperacionais, b?b.despOperacionais:null, brl2, true)}
+    ${dreCardHTML('Resultado Operacional', brl(a.resultadoOperacional), a.resultadoOperacional, b?b.resultadoOperacional:null, brl2)}
+    ${dreCardHTML('Margem de Contribuição', drePctFmt(a.margemContribuicao), a.margemContribuicao, b?b.margemContribuicao:null, drePctFmt)}
+    ${dreCardHTML('Ponto de Equilíbrio', brl(a.pontoEquilibrio), a.pontoEquilibrio, b?b.pontoEquilibrio:null, brl2, true)}
+  </div>
+
+  <section class="panel">
+    <h2>DRE do período</h2>
+    <div class="desc">Comparado com o período anterior de mesmo tamanho (${antRange?filtroLabelRange(antRange.de,antRange.ate):'sem período anterior suficiente carregado'})</div>
+    <table>
+      <thead><tr><th>Conta</th><th class="num">Valor</th><th class="num">% Receita Líquida</th><th class="num">Período Anterior</th><th class="num">Variação</th><th class="num">Diferença</th></tr></thead>
+      <tbody>${linhas.map(r=>dreTableRowHTML(r, a.receitaLiquida)).join('')}</tbody>
+    </table>
+  </section>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>Análise vertical (% da Receita Líquida)</h2>
+      <div class="desc">Quanto cada componente representa da receita líquida do período</div>
+      ${hbarHTML(vertical, v=>v.nome, v=>v.valor, v=>v.cor, a.receitaLiquida)}
+    </section>
+    <section class="panel">
+      <h2>Distribuição das despesas operacionais</h2>
+      <div class="desc">Fixas + variáveis, por categoria do plano de contas — top 9 + "Outros"</div>
+      ${despPorCat.length ? pieChartHTML(despPorCat, d=>d.nome, d=>d.valor, d=>d.cor) : '<div class="desc">Sem despesas classificadas no período</div>'}
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Receita Líquida x CMV x Lucro Bruto</h2>
+    <div class="desc">Por mês — CMV e Lucro Bruto empilhados somam a Receita Líquida</div>
+    <div class="barchart">${stackedBarChartHTML(mensal, m=>monthLabel(m.ano,m.mes), [
+      {label:'CMV', color:'#c62828', valueFn:m=>m.cmv},
+      {label:'Lucro Bruto', color:'#2e7d32', valueFn:m=>Math.max(0,m.lucroBruto)},
+    ])}</div>
+    <div class="legend" style="margin-top:8px"><span><span class="dot" style="background:#c62828"></span>CMV</span><span><span class="dot" style="background:#2e7d32"></span>Lucro Bruto</span></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>Evolução da Margem Bruta</h2>
+      <div class="barchart">${pctBarChartHTML(mensal, m=>monthLabel(m.ano,m.mes), m=>m.margemBruta*100, m=>m.margemBruta*100<40?'#c62828':m.margemBruta*100<55?'#e08e0b':'#2e7d32')}</div>
+    </section>
+    <section class="panel">
+      <h2>Evolução da Margem Operacional</h2>
+      <div class="barchart">${pctBarChartHTML(mensal, m=>monthLabel(m.ano,m.mes), m=>m.margemOperacional*100, m=>m.margemOperacional*100<0?'#c62828':m.margemOperacional*100<10?'#e08e0b':'#2e7d32')}</div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Ponto de Equilíbrio x Receita Real</h2>
+    <div class="kpis" style="margin-bottom:10px">
+      <div class="kpi"><div class="label">Ponto de Equilíbrio (período)</div><div class="value">${brl(a.pontoEquilibrio)}</div></div>
+      <div class="kpi ${a.movimentoTotal>=a.pontoEquilibrio?'good':'bad'}"><div class="label">Receita Real</div><div class="value">${brl(a.movimentoTotal)}</div></div>
+      <div class="kpi ${a.margemSeguranca>=0?'good':'bad'}"><div class="label">Margem de Segurança</div><div class="value">${(a.margemSeguranca*100).toFixed(1)}%</div><div class="sub">${a.margemSeguranca>=0?'acima':'abaixo'} do ponto de equilíbrio</div></div>
+    </div>
+    ${hbarHTML([{nome:'Ponto de Equilíbrio',valor:a.pontoEquilibrio,cor:'#888'},{nome:'Receita Real',valor:a.movimentoTotal,cor:a.movimentoTotal>=a.pontoEquilibrio?'#2e7d32':'#c62828'}], v=>v.nome, v=>v.valor, v=>v.cor)}
+  </section>
+
+  <section class="panel">
+    <h2>Pareto das despesas operacionais</h2>
+    <div class="desc">Categorias ordenadas da maior pra menor — linha tracejada marca onde acumula ~80% do total</div>
+    <table>
+      <thead><tr><th>Categoria</th><th class="num">Valor</th><th class="num">% do total</th><th class="num">Acumulado</th></tr></thead>
+      <tbody>${pareto.map((d,i)=>`<tr style="${idx80>=0 && i===idx80?'border-top:2px dashed var(--bad)':''}"><td>${d.nome}</td><td class="num">${brl2(d.valor)}</td><td class="num">${pct(d.valor,totalDesp)}</td><td class="num">${d.acumPct.toFixed(1)}%</td></tr>`).join('') || '<tr><td colspan=4>Sem despesas no período</td></tr>'}</tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Insights automáticos</h2>
+    <ul style="margin:0; padding-left:20px; line-height:1.9">${insights.map(i=>`<li>${i}</li>`).join('')}</ul>
+  </section>
+
+  <section class="panel">
+    <h2>Recomendações</h2>
+    <ul style="margin:0; padding-left:20px; line-height:1.9">${recomendacoes.map(r=>`<li>${r}</li>`).join('')}</ul>
+  </section>
+
+  <div class="callout ${a.resultadoOperacional>=0?'blue':'red'}">
+    <b>Diagnóstico geral:</b> No período selecionado a empresa ${a.resultadoOperacional>=0?'teve resultado operacional positivo':'teve resultado operacional negativo'} de ${brl2(a.resultadoOperacional)}
+    (margem operacional de ${(a.margemOperacional*100).toFixed(1)}%), com margem bruta de ${(a.margemBruta*100).toFixed(1)}%
+    e receita ${a.movimentoTotal>=a.pontoEquilibrio?`${(a.margemSeguranca*100).toFixed(1)}% acima`:`abaixo`} do ponto de equilíbrio estimado.
+    ${b ? `Em relação ao período anterior, a receita líquida ${dreVarPct(a.receitaLiquida,b.receitaLiquida)>=0?'cresceu':'caiu'} ${Math.abs(dreVarPct(a.receitaLiquida,b.receitaLiquida)).toFixed(1)}%
+    e o resultado operacional ${dreVarPct(a.resultadoOperacional,b.resultadoOperacional)>=0?'cresceu':'caiu'} ${Math.abs(dreVarPct(a.resultadoOperacional,b.resultadoOperacional)).toFixed(1)}%.` : ''}
+  </div>
+  `;
+}
+
 function ctaReceberPagarBlock(domKey, titulo, mensalArr, legado, agingArr, chartMensalArr, chartNota){
   const isReceber = domKey==='receber';
   const kpiM = periodArr(mensalArr);
@@ -1298,7 +1627,7 @@ function renderPagar(){
 }
 
 /* ===================== CONFIGURAÇÕES ===================== */
-const PERM_LABELS = { resumo:'Resumo', vendas:'Vendas', lucro:'Lucro por Produto', estoque:'Estoque', receber:'Receber', pagar:'Pagar', equilibrio:'Equilíbrio', contas:'Contas' };
+const PERM_LABELS = { resumo:'Resumo', vendas:'Vendas', lucro:'Lucro por Produto', estoque:'Estoque', receber:'Receber', pagar:'Pagar', equilibrio:'Equilíbrio', dre:'DRE Gerencial', contas:'Contas' };
 
 function renderConfiguracoes() {
   return `<div id="configWrap"><div style="text-align:center;padding:40px;color:var(--muted)">Carregando…</div></div>`;
