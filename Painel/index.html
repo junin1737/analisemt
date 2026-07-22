@@ -892,6 +892,9 @@ function renderEstoque(){
   const cmvEstimado = custo + custoEstimadoZerado;
   const margemEstimada = venda ? ((venda-cmvEstimado)/venda*100) : 0;
 
+  const custoMaiorVenda = produtosCustoMaiorVenda();
+  const prejuizoTotal = sum(custoMaiorVenda,'prejuizo');
+
   return `
   <div class="callout muted">Os 4 cards abaixo são o <b>saldo atual</b> do estoque (foto de ${e.snapshotDate}) — não mudam com o filtro de período, pois estoque é saldo, não fluxo. Valor soma só SKUs com quantidade <b>positiva</b>.</div>
   <div class="kpis">
@@ -924,12 +927,63 @@ function renderEstoque(){
     <div class="note">Estimativa de consultoria, não um número exato do sistema — pressupõe que produtos sem custo registrado têm, em média, a mesma margem dos produtos similares com custo conhecido. Ainda assim, é mais realista que assumir custo zero. Vale revisar o cadastro de custo com o cliente pra ter o número real.</div>
   </section>
 
+  <section class="panel">
+    <h2>Produtos com custo maior que o valor de venda</h2>
+    <div class="desc">Produtos vendidos no período cujo custo total ficou acima do valor total vendido — normalmente indica erro de cadastro de custo (unidade errada, preço de lote lançado como preço unitário, etc.), não prejuízo real de venda.</div>
+    <div class="kpis">
+      <div class="kpi ${custoMaiorVenda.length>0?'bad':'good'}">
+        <div class="label">Produtos com custo &gt; venda</div>
+        <div class="value">${num(custoMaiorVenda.length)}</div>
+        <div class="sub">${custoMaiorVenda.length>0?`${brl2(prejuizoTotal)} de diferença somada no período`:'nenhum produto com esse problema no período'}</div>
+        ${custoMaiorVenda.length>0?'<button class="kpi-detail-btn" onclick="openDetalhesCustoMaiorVenda()">Detalhes</button>':''}
+      </div>
+    </div>
+  </section>
+
   <div class="callout blue">
     <b>Como a "Margem bruta estimada (ajustada)" é calculada:</b> é (Faturamento total − CMV Estimado) ÷ Faturamento total, no período selecionado — somando vendas
     <b>fiscais (modelo 65) e gerenciais (modelo GR) juntas</b>, dos dois lados da conta (receita e custo). O CMV Estimado soma o custo realmente registrado (TB_NFV_ITEM.VLR_CUSTO) com uma estimativa
     para os itens vendidos sem custo cadastrado, calculada aplicando a margem média dos produtos com custo conhecido sobre o valor desses itens (ver cards acima). Esse número de margem é o mesmo
     usado no card "Margem bruta estimada" da aba Resumo.
   </div>`;
+}
+
+function produtosCustoMaiorVenda(){
+  const arr = periodArr(DADOS.vendas.lucroProdutoMensal);
+  const m = new Map();
+  arr.forEach(r => {
+    let p = m.get(r.nome);
+    if (!p) { p = { nome:r.nome, venda:0, custo:0, qtd:0 }; m.set(r.nome, p); }
+    p.venda += r.venda; p.custo += r.custo; p.qtd += r.qtd;
+  });
+  return [...m.values()]
+    .filter(p => p.custo > p.venda && p.venda > 0)
+    .map(p => ({ ...p, prejuizo: p.custo-p.venda, margem: (p.venda-p.custo)/p.venda*100 }))
+    .sort((a,b) => b.prejuizo - a.prejuizo);
+}
+
+function openDetalhesCustoMaiorVenda(){
+  const lista = produtosCustoMaiorVenda();
+  if (!lista.length) {
+    document.getElementById('detalhesContent').innerHTML = '<p style="color:var(--muted);text-align:center;padding:24px 0">Nenhum produto com custo maior que venda no período.</p>';
+    document.getElementById('detalhesModal').style.display = 'flex';
+    return;
+  }
+  const html = `
+    <div class="desc" style="margin-bottom:12px">${num(lista.length)} produto(s) no período selecionado (${filtroLabel()}) — ordenado pela maior diferença</div>
+    <table>
+      <thead><tr><th>Produto</th><th class="num">Qtd</th><th class="num">Venda</th><th class="num">Custo</th><th class="num">Diferença</th><th class="num">Margem</th></tr></thead>
+      <tbody>${lista.map(p=>`<tr>
+        <td>${p.nome}</td>
+        <td class="num">${num(p.qtd)}</td>
+        <td class="num">${brl2(p.venda)}</td>
+        <td class="num">${brl2(p.custo)}</td>
+        <td class="num" style="color:var(--bad)">${brl2(p.prejuizo)}</td>
+        <td class="num" style="color:var(--bad)">${p.margem.toFixed(0)}%</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  document.getElementById('detalhesContent').innerHTML = html;
+  document.getElementById('detalhesModal').style.display = 'flex';
 }
 
 function renderContas(){
