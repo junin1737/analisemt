@@ -153,6 +153,17 @@
   <span id="updateMsg"></span>
   <button id="updateBtn">Baixar atualização</button>
 </div>
+
+<div id="updateProgressOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;padding:32px 36px;min-width:340px;max-width:420px;box-shadow:0 8px 32px rgba(0,0,0,0.25);text-align:center;">
+    <h2 style="margin:0 0 10px;color:#2c3e6b;font-size:1.1rem;">Atualizando o Painel CLIPP</h2>
+    <p id="updateProgressMsg" style="margin:0 0 18px;color:#555;font-size:.88rem;">Uma nova atualização está sendo baixada. Em breve o aplicativo será reiniciado e abrirá na nova versão.</p>
+    <div style="background:#eee;border-radius:8px;height:14px;overflow:hidden;">
+      <div id="updateProgressBar" style="background:#3f6fb5;height:100%;width:0%;border-radius:8px;transition:width .25s ease;"></div>
+    </div>
+    <p id="updateProgressPct" style="margin:10px 0 0;color:#888;font-size:.8rem;">0%</p>
+  </div>
+</div>
 <header>
   <div>
     <h1 id="headerTitle">Painel CLIPP — Diagnóstico do Negócio</h1>
@@ -1319,12 +1330,29 @@ function setUpdateBanner(msg, { showBtn = false, show = true } = {}) {
   if (btnDl) btnDl.style.display = showBtn ? '' : 'none';
 }
 
+// Telinha de progresso em destaque, mostrada só antes do login (CURRENT_USER ainda null) -
+// depois de logado, a atualização baixando em segundo plano usa só a faixa fina do topo
+// (setUpdateBanner), pra não interromper quem já está trabalhando no painel.
+function setUpdateOverlay(msg, { show = true, pct = null } = {}) {
+  const overlay = document.getElementById('updateProgressOverlay');
+  const msgEl   = document.getElementById('updateProgressMsg');
+  const bar     = document.getElementById('updateProgressBar');
+  const pctEl   = document.getElementById('updateProgressPct');
+  if (overlay) overlay.style.display = show ? 'flex' : 'none';
+  if (msgEl && msg) msgEl.textContent = msg;
+  if (pct !== null) {
+    if (bar) bar.style.width = pct + '%';
+    if (pctEl) pctEl.textContent = pct + '%';
+  }
+}
+
 function wireUpdaterEvents() {
   if (!isElectronUpdater()) return;
   const btn = document.getElementById('btnAtualizarApp');
   window.updater.onAvailable((info) => {
     if (btn) { btn.classList.add('has-update'); btn.title = `Baixando v${info.version}…`; }
     setUpdateBanner(`Nova versão v${info.version} disponível — baixando automaticamente…`, { showBtn:false });
+    if (!CURRENT_USER) setUpdateOverlay(`Uma nova atualização (v${info.version}) está sendo baixada. Em breve o aplicativo será reiniciado e abrirá na nova versão.`, { show:true, pct:0 });
     window.updater.download();
   });
   window.updater.onNotAvailable(() => {
@@ -1336,15 +1364,18 @@ function wireUpdaterEvents() {
     const pct = Math.round(p.percent || 0);
     if (btn) btn.title = `Baixando atualização… ${pct}%`;
     setUpdateBanner(`Baixando atualização… ${pct}%`, { showBtn:false });
+    if (!CURRENT_USER) setUpdateOverlay(null, { show:true, pct });
   });
   window.updater.onDownloaded((info) => {
     if (btn) btn.title = `Instalando v${info.version}…`;
     setUpdateBanner(`Atualização v${info.version} pronta! Reiniciando o aplicativo…`, { showBtn:false });
+    if (!CURRENT_USER) setUpdateOverlay('Atualização pronta! Reiniciando o aplicativo…', { show:true, pct:100 });
     setTimeout(() => window.updater.install(), 1500);
   });
   window.updater.onError((message) => {
     if (btn) btn.title = 'Erro ao atualizar — clique para tentar de novo';
     setUpdateBanner('Erro ao atualizar: ' + message, { showBtn:false });
+    setUpdateOverlay(null, { show:false });
   });
 }
 
@@ -1492,6 +1523,7 @@ function showLoginModal(usuarios, nfCount, opts) {
     CURRENT_USER = { id:d.id, nome:d.nome, supervisor:d.supervisor, permissoes:d.permissoes };
     atualizarCurrentUserLabel();
     document.getElementById('loginModal').style.display = 'none';
+    setUpdateOverlay(null, { show:false }); // login concluído - atualização (se ainda baixando) segue só na faixa do topo
 
     if (skipDadosReload) {
       buildTabs();
