@@ -16,7 +16,10 @@
   "devDependencies": {
     "electron": "^31.7.7",
     "electron-builder": "^24.13.3",
-    "png-to-ico": "^3.0.1"
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "png-to-ico": "^3.0.1",
+    "xlsx": "^0.18.5"
   },
   "build": {
     "appId": "com.mt.clipp-painel",
@@ -39,6 +42,9 @@
       "server.js",
       "package.json",
       "node_modules/**",
+      "!node_modules/jspdf/**",
+      "!node_modules/html2canvas/**",
+      "!node_modules/xlsx/**",
       "Painel/**",
       "MTdll/**"
     ],
