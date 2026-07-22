@@ -262,6 +262,7 @@ const ALL_TABS = [
   { key:'pagar',      label:'Contas a Pagar' },
   { key:'equilibrio', label:'Ponto de Equilíbrio' },
   { key:'dre',        label:'DRE Gerencial' },
+  { key:'sugestoes',  label:'Sugestões' },
   { key:'contas',     label:'Saldo das Contas' },
 ];
 
@@ -493,7 +494,7 @@ function renderAll(){
   } else {
     alertaEl.style.display = 'none';
   }
-  const fns = { resumo:renderResumo, vendas:renderVendas, lucro:renderLucroProduto, estoque:renderEstoque, receber:renderReceber, pagar:renderPagar, equilibrio:renderEquilibrio, dre:renderDRE, contas:renderContas, configuracoes:renderConfiguracoes };
+  const fns = { resumo:renderResumo, vendas:renderVendas, lucro:renderLucroProduto, estoque:renderEstoque, receber:renderReceber, pagar:renderPagar, equilibrio:renderEquilibrio, dre:renderDRE, sugestoes:renderSugestoes, contas:renderContas, configuracoes:renderConfiguracoes };
   document.getElementById('tabContent').innerHTML = fns[state.tab] ? fns[state.tab]() : '';
   if (state.tab === 'configuracoes') loadConfiguracoes();
 }
@@ -1408,6 +1409,206 @@ function renderDRE(){
   `;
 }
 
+/* ===================== RAMO DE ATIVIDADE / SUGESTÕES ===================== */
+const RAMOS_ATIVIDADE = [
+  { id:'moda',        label:'Moda e Vestuário (loja de roupas/boutique)' },
+  { id:'calcados',    label:'Calçados e Acessórios' },
+  { id:'alimentacao', label:'Alimentação (restaurante/lanchonete/padaria)' },
+  { id:'mercado',     label:'Mercado/Conveniência' },
+  { id:'farmacia',    label:'Farmácia' },
+  { id:'papelaria',   label:'Papelaria e Presentes' },
+  { id:'moveis',      label:'Móveis e Decoração' },
+  { id:'eletronicos', label:'Eletrônicos e Informática' },
+  { id:'beleza',      label:'Salão de Beleza e Estética' },
+  { id:'petshop',     label:'Pet Shop' },
+  { id:'construcao',  label:'Materiais de Construção' },
+  { id:'servicos',    label:'Serviços em geral' },
+  { id:'outro',       label:'Outro' },
+];
+
+const DICAS_RAMO = {
+  moda: { geral: [
+    'Fazer curva ABC de produtos por giro e reduzir compra dos itens que empatam (ver aba Lucro por Produto).',
+    'Revisar preço de peças de coleções passadas periodicamente — estoque parado de moda perde valor rápido.',
+    'Negociar prazo de pagamento com fornecedores alinhado ao prazo médio de recebimento das vendas parceladas.',
+    'Padronizar o cadastro de grupo/categoria de produto no sistema — ajuda a enxergar de verdade o que vende mais (ver aba Vendas).',
+    'Ter meta de conversão de condicionais e acompanhar isso com a equipe de vendas.',
+  ], marketing: [
+    'Editorial/lookbook fotográfico das peças novas para Instagram e WhatsApp Status.',
+    'Lista de transmissão no WhatsApp pra avisar chegada de coleção pros clientes que já compraram.',
+    'Programa de fidelidade simples (ex: a cada X compras, desconto na próxima).',
+    'Parcerias com microinfluenciadoras locais pra prova de roupa/parceria.',
+    'Vídeos curtos de "provador" mostrando como as peças caem no corpo.',
+    'Trocar a vitrine física com frequência pra gerar tráfego de passagem.',
+  ]},
+  calcados: { geral: [
+    'Curva ABC por número/tamanho — calçado tem alto risco de sobra por grade incompleta.',
+    'Atenção redobrada a estoque parado — moda de calçado também é sazonal.',
+    'Acompanhar giro por marca/modelo pra decidir reposição com mais precisão.',
+  ], marketing: [
+    'Fotos em uso (pé calçado), não só produto isolado.',
+    'Parcerias com academias/personal trainers (tênis) ou salões (sapato social), conforme o público.',
+    'Divulgar lançamentos de coleção com antecedência.',
+  ]},
+  alimentacao: { geral: [
+    'Ter ficha técnica de cada prato/produto pra saber o custo real por porção — CMV de alimentação é traiçoeiro sem isso.',
+    'Controlar desperdício e perda de insumo perecível — impacta direto a margem.',
+    'Revisar o cardápio: itens de baixa margem que vendem muito "puxam" o resultado pra baixo.',
+  ], marketing: [
+    'Fotos de prato pronto em alta qualidade pro Instagram, iFood e Google Meu Negócio.',
+    'Sugestão de bebida/sobremesa no pedido (upsell no caixa ou no delivery).',
+    'Pedir ativamente avaliação no Google/iFood pro cliente satisfeito.',
+  ]},
+  mercado: { geral: [
+    'Ruptura de estoque (produto que falta na prateleira) é a principal perda de venda em mercado — monitorar giro de perto.',
+    'Antecipar promoção de perecíveis próximos do vencimento em vez de ter perda total.',
+  ], marketing: [
+    'Encarte digital semanal (WhatsApp/redes) com as ofertas da semana.',
+    'Programa de fidelidade vinculado ao CPF na nota.',
+  ]},
+  farmacia: { geral: [
+    'Curva ABC por categoria (genérico x referência) — a margem varia bastante entre elas.',
+    'Atenção à validade de itens de baixo giro.',
+  ], marketing: [
+    'Parcerias com clínicas/consultórios da região pra indicação.',
+    'Delivery local divulgado no WhatsApp.',
+  ]},
+  papelaria: { geral: [
+    'Sazonalidade forte (volta às aulas, Dia das Mães, Natal) — planejar a compra de estoque com antecedência nesses picos.',
+    'Produtos de cartão/presente costumam ter margem melhor que material escolar — dar destaque de vitrine pra eles.',
+  ], marketing: [
+    'Divulgar datas comemorativas com antecedência (Dia dos Namorados, Páscoa, etc.) — cartão/presente é venda de ocasião.',
+    'Parceria com escolas da região pra lista de material.',
+    'Sugestões de presente por faixa de preço nas redes sociais.',
+  ]},
+  moveis: { geral: [
+    'Ticket alto e ciclo de venda mais longo — acompanhar a taxa de conversão de orçamento em venda.',
+    'Cuidado com capital parado em mostruário/estoque de móveis grandes.',
+  ], marketing: [
+    'Fotos de ambientes montados, não só o móvel isolado.',
+    'Parceria com arquitetos/decoradores locais.',
+  ]},
+  eletronicos: { geral: [
+    'Margem geralmente menor, giro precisa ser mais rápido — atenção a produto obsoleto parado no estoque.',
+    'Garantia e pós-venda bem feito geram recompra e indicação.',
+  ], marketing: [
+    'Comparativo de produtos/reviews em vídeo curto.',
+    'Parcelamento em destaque na divulgação — pesa bastante na decisão de compra.',
+  ]},
+  beleza: { geral: [
+    'Taxa de ocupação da agenda é o principal indicador — horário vago é receita perdida.',
+    'Venda de produto (revenda) além do serviço aumenta o ticket médio.',
+  ], marketing: [
+    'Antes/depois em redes sociais (com autorização do cliente).',
+    'Lembrete de reagendamento automático via WhatsApp.',
+    'Pacote/assinatura mensal pra fidelizar recorrência.',
+  ]},
+  petshop: { geral: [
+    'Serviços recorrentes (banho/tosa) geram previsibilidade de caixa — vale ter agenda de recorrência.',
+    'Ração e itens de consumo costumam ter margem menor que acessório/serviço.',
+  ], marketing: [
+    'Pacote mensal de banho/tosa pra fidelizar.',
+    'Conteúdo educativo (cuidados com pet) atrai engajamento orgânico.',
+  ]},
+  construcao: { geral: [
+    'Venda pra profissional (pedreiro/construtor) x consumidor final tem margem e prazo diferentes — vale separar a análise.',
+    'Estoque de material pesado imobiliza capital — atenção ao giro.',
+  ], marketing: [
+    'Relacionamento direto com profissionais da região — eles indicam a loja pros clientes.',
+    'Orçamento rápido por WhatsApp.',
+  ]},
+  servicos: { geral: [
+    'Acompanhar a taxa de ocupação/utilização da capacidade (hora produtiva vendida x disponível).',
+    'Padronizar o processo de atendimento pra escalar sem depender só do dono.',
+  ], marketing: [
+    'Depoimento de cliente satisfeito (prova social) é o principal gatilho em serviços.',
+    'Google Meu Negócio bem preenchido e com avaliações.',
+  ]},
+  outro: { geral: [
+    'Acompanhar margem e despesas fixas mês a mês (ver aba DRE Gerencial).',
+    'Identificar os produtos/serviços mais rentáveis e focar neles (ver aba Lucro por Produto).',
+  ], marketing: [
+    'Manter presença ativa em pelo menos uma rede social com fotos de qualidade.',
+    'Usar WhatsApp Business pra atendimento e divulgação direta com clientes.',
+  ]},
+};
+
+const DICAS_FINANCEIRAS_RAMO = {
+  cmvAlto: {
+    moda: 'No varejo de moda, CMV alto costuma vir de estoque parado de coleções passadas — considere liquidação programada e reveja a curva de compra por giro (ver aba Lucro por Produto).',
+    calcados: 'Sobra de grade (números que não vendem) costuma inflar o CMV em calçados — ajuste a curva de compra por tamanho.',
+    alimentacao: 'Em alimentação, CMV alto geralmente vem de ficha técnica mal calculada ou desperdício de insumo — revise o custo real por prato.',
+    mercado: 'Perda por ruptura/validade de perecíveis costuma pesar no CMV de mercado — reforce o controle de validade e promoções antecipadas.',
+    farmacia: 'Reveja o mix entre genérico e referência — a margem varia bastante entre eles.',
+    _default: 'CMV alto em relação à receita — vale renegociar prazo/preço com fornecedores e revisar a precificação dos produtos de menor margem (ver aba Lucro por Produto).',
+  },
+  despesaFixaAlta: {
+    _default: 'Despesas operacionais consumindo grande parte da receita — reveja contratos recorrentes (aluguel, folha, assinaturas) e o que pode ser renegociado ou cortado sem afetar a operação.',
+  },
+  margemContribuicaoBaixa: {
+    moda: 'Margem de contribuição baixa em moda geralmente indica desconto excessivo na venda — reveja a política de desconto da equipe e foque nos grupos de produto mais rentáveis.',
+    alimentacao: 'Margem de contribuição baixa pode indicar cardápio com muito item de baixa margem — revise o mix de produtos vendidos.',
+    _default: 'Margem de contribuição baixa — cada venda sobra pouco pra cobrir despesa fixa; foque nos produtos/serviços mais rentáveis.',
+  },
+  ticketMedioBaixo: {
+    moda: 'Ações de venda casada (ex: sugerir acessório junto com a peça principal) tendem a elevar o ticket médio.',
+    alimentacao: 'Sugestão de bebida/sobremesa no pedido (upsell no caixa ou no delivery) costuma elevar o ticket médio.',
+    beleza: 'Oferecer produto de revenda junto do serviço eleva o ticket sem precisar de mais clientes.',
+    petshop: 'Sugerir banho/tosa ou acessório junto de uma compra de ração eleva o ticket médio.',
+    _default: 'Ações de venda casada/upsell podem melhorar o ticket médio sem depender de mais clientes.',
+  },
+  abaixoPontoEquilibrio: {
+    _default: 'Faturamento abaixo do ponto de equilíbrio — priorize aumento de vendas (ver as sugestões de marketing abaixo) ou corte de despesa fixa até fechar essa conta.',
+  },
+};
+function dicaFinanceira(tipo, ramoId){
+  const grupo = DICAS_FINANCEIRAS_RAMO[tipo];
+  if (!grupo) return null;
+  return grupo[ramoId] || grupo._default;
+}
+function sugestoesFinanceirasRamo(a, ramoId){
+  const sug = [];
+  if (a.receitaLiquida && a.margemBruta < 0.5) sug.push(dicaFinanceira('cmvAlto', ramoId));
+  if (a.despOperacionais && a.receitaLiquida && (a.despOperacionais/a.receitaLiquida) > 0.35) sug.push(dicaFinanceira('despesaFixaAlta', ramoId));
+  if (a.receitaLiquida && a.margemContribuicao < 0.3) sug.push(dicaFinanceira('margemContribuicaoBaixa', ramoId));
+  if (a.movimentoTotal > 0 && a.movimentoTotal < a.pontoEquilibrio) sug.push(dicaFinanceira('abaixoPontoEquilibrio', ramoId));
+  if (a.ticketMedio > 0) sug.push(dicaFinanceira('ticketMedioBaixo', ramoId));
+  if (!sug.length) sug.push('Números do período dentro do esperado — manter o acompanhamento mensal da margem e das despesas fixas (ver aba DRE Gerencial).');
+  return [...new Set(sug.filter(Boolean))];
+}
+
+function renderSugestoes(){
+  const ramoId = DADOS.ramoAtividade;
+  const ramoInfo = RAMOS_ATIVIDADE.find(r=>r.id===ramoId);
+  const dicas = DICAS_RAMO[ramoId] || DICAS_RAMO.outro;
+  const a = calcularDRE(state.de, state.ate);
+  const financeiras = sugestoesFinanceirasRamo(a, ramoId || 'outro');
+
+  return `<h2 style="margin-top:0">Sugestões</h2>
+  ${!ramoId
+    ? `<div class="callout yellow"><b>Ramo de atividade não definido.</b> As dicas abaixo estão no genérico. Defina o ramo de atividade do cliente na aba <b>⚙ Configurações</b> pra receber sugestões mais direcionadas.</div>`
+    : `<div class="callout blue"><b>Ramo de atividade:</b> ${ramoInfo?ramoInfo.label:ramoId}</div>`}
+
+  <section class="panel">
+    <h2>Onde focar agora (baseado nos seus números)</h2>
+    <div class="desc">Gerado a partir da DRE Gerencial do período selecionado (${filtroLabel()})</div>
+    <ul style="margin:0; padding-left:20px; line-height:1.9">${financeiras.map(s=>`<li>${s}</li>`).join('')}</ul>
+  </section>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>Dicas gerais para o ramo</h2>
+      <ul style="margin:0; padding-left:20px; line-height:1.9">${dicas.geral.map(d=>`<li>${d}</li>`).join('')}</ul>
+    </section>
+    <section class="panel">
+      <h2>Sugestões de marketing</h2>
+      <ul style="margin:0; padding-left:20px; line-height:1.9">${dicas.marketing.map(d=>`<li>${d}</li>`).join('')}</ul>
+    </section>
+  </div>
+  <div class="note">Dicas gerais de gestão/marketing por ramo — não substituem a análise específica do negócio, servem como ponto de partida pra discussão com o cliente.</div>
+  `;
+}
+
 function ctaReceberPagarBlock(domKey, titulo, mensalArr, legado, agingArr, chartMensalArr, chartNota){
   const isReceber = domKey==='receber';
   const kpiM = periodArr(mensalArr);
@@ -1627,7 +1828,7 @@ function renderPagar(){
 }
 
 /* ===================== CONFIGURAÇÕES ===================== */
-const PERM_LABELS = { resumo:'Resumo', vendas:'Vendas', lucro:'Lucro por Produto', estoque:'Estoque', receber:'Receber', pagar:'Pagar', equilibrio:'Equilíbrio', dre:'DRE Gerencial', contas:'Contas' };
+const PERM_LABELS = { resumo:'Resumo', vendas:'Vendas', lucro:'Lucro por Produto', estoque:'Estoque', receber:'Receber', pagar:'Pagar', equilibrio:'Equilíbrio', dre:'DRE Gerencial', sugestoes:'Sugestões', contas:'Contas' };
 
 function renderConfiguracoes() {
   return `<div id="configWrap"><div style="text-align:center;padding:40px;color:var(--muted)">Carregando…</div></div>`;
@@ -1654,7 +1855,16 @@ async function loadConfiguracoes() {
       </div>
     </div>`;
   }).join('');
+  const ramoAtual = data.ramoAtividade || '';
+  const ramoOptions = [`<option value="">— não definido —</option>`]
+    .concat(RAMOS_ATIVIDADE.map(r=>`<option value="${r.id}" ${r.id===ramoAtual?'selected':''}>${r.label}</option>`))
+    .join('');
   wrap.innerHTML = `
+    <div class="config-section">
+      <h3>Ramo de atividade do cliente</h3>
+      <div class="desc" style="font-size:12px;color:var(--muted);margin-bottom:10px;">Usado pra direcionar as dicas e sugestões de marketing na aba <b>Sugestões</b>.</div>
+      <select id="ramoAtividadeSelect" style="width:100%;max-width:420px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:.9rem;background:var(--card);color:var(--ink);margin-bottom:8px;">${ramoOptions}</select>
+    </div>
     <div class="config-section">
       <h3>Usuários e Permissões</h3>
       ${cards}
@@ -1683,13 +1893,16 @@ async function salvarConfiguracoes() {
   const sup = old.usuarios.find(u => u.supervisor);
   const supSenhaInput = document.querySelector(`.senha-input[data-uid="${sup?.id}"]`);
   const supervisorSenha = (supSenhaInput && supSenhaInput.value.trim()) ? supSenhaInput.value.trim() : sup.senha;
+  const ramoSelect = document.getElementById('ramoAtividadeSelect');
+  const ramoAtividade = ramoSelect ? (ramoSelect.value || null) : old.ramoAtividade;
   const r = await fetch('/api/config-usuarios', {
     method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ supervisorSenha: sup.senha, usuarios: updated })
+    body: JSON.stringify({ supervisorSenha: sup.senha, usuarios: updated, ramoAtividade })
   });
   const d = await r.json();
   msg.style.color = d.ok ? '#2e7d32' : '#c62828';
   msg.textContent = d.ok ? '✔ Configurações salvas.' : 'Erro: ' + d.error;
+  if (d.ok && DADOS) DADOS.ramoAtividade = ramoAtividade; // reflete na aba Sugestões sem precisar recarregar tudo
 }
 
 /* ===================== UPDATE ===================== */

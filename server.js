@@ -114,7 +114,8 @@ function getConfigPath() {
 }
 const PERM_DEFAULT = { resumo:true, vendas:true, estoque:true, receber:true, pagar:true, equilibrio:true, contas:true };
 const CONFIG_DEFAULT = {
-  usuarios: [{ id:0, nome:'Supervisor', senha:SUPERVISOR_SENHA, supervisor:true, permissoes:{ ...PERM_DEFAULT } }]
+  usuarios: [{ id:0, nome:'Supervisor', senha:SUPERVISOR_SENHA, supervisor:true, permissoes:{ ...PERM_DEFAULT } }],
+  ramoAtividade: null,
 };
 function loadConfig() {
   const p = getConfigPath();
@@ -912,16 +913,18 @@ app.post('/api/login', (req, res) => {
 });
 
 app.get('/api/config-usuarios', (req, res) => {
-  res.json({ ok:true, usuarios: loadConfig().usuarios });
+  const cfg = loadConfig();
+  res.json({ ok:true, usuarios: cfg.usuarios, ramoAtividade: cfg.ramoAtividade || null });
 });
 
 app.put('/api/config-usuarios', (req, res) => {
-  const { supervisorSenha, usuarios } = req.body;
+  const { supervisorSenha, usuarios, ramoAtividade } = req.body;
   const cfg = loadConfig();
   const sup = cfg.usuarios.find(u => u.supervisor);
   if (!sup || sup.senha !== String(supervisorSenha||'')) return res.json({ ok:false, error:'Senha de supervisor inválida.' });
   // A senha do Supervisor é fixa e não pode ser alterada pela tela de configurações.
   cfg.usuarios = usuarios.map(u => u.supervisor ? { ...u, senha: SUPERVISOR_SENHA } : u);
+  if (ramoAtividade !== undefined) cfg.ramoAtividade = ramoAtividade || null;
   saveConfig(cfg);
   res.json({ ok:true });
 });
@@ -1024,6 +1027,7 @@ app.get('/api/dados', async (req, res) => {
     const months = generateMonths(startDate, endDate);
     console.log(`Loading data: ${startDate} → ${endDate} (${months.length} months)`);
     const dados = await buildDados(startDate, endDate, months);
+    dados.ramoAtividade = loadConfig().ramoAtividade || null;
     res.json({ ok:true, dados });
   } catch(e) {
     console.error('DADOS ERROR:', e.message);
