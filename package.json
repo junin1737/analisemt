@@ -1,6 +1,6 @@
 {
   "name": "clipp-painel",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Painel de análise CLIPP - MT Automações",
   "main": "main.js",
   "scripts": {
